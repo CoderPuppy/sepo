@@ -140,7 +140,7 @@ field1
 	=   options playlistIdPrefixes *> fmap (flip FieldAccess [] . PlaylistId . T.pack) (many alphaNumChar)
 	<|> optionWs playingNames *> pure (FieldAccess Playing [])
 	<|> fmap (flip FieldAccess [] . PlaylistName) identifier
-	<|> single '(' *> ws *> field <* ws <* single ')'
+	<|> try (single '(' *> ws *> field <* ws <* single ')')
 
 field2 :: Parser FieldAccess
 field2 = liftA2 (foldl (flip ($))) (field1 <* ws) (many $ asum (fmap try [
