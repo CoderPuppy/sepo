@@ -2,16 +2,17 @@ module Sepo.Parser where
 
 import Control.Applicative
 import Control.Monad
-import qualified Data.Text as T
+import Data.Char
 import Data.Foldable
 import Data.Maybe
 import Data.Void
 import Sepo.AST
 import Text.Megaparsec hiding (many, some)
 import Text.Megaparsec.Char
+import qualified Data.Text as T
 
 playlistIdPrefixes :: [T.Text]
-playlistIdPrefixes = ["p:", "pl:", "playlist:", "spotify:user:coderpuppy-oreo:playlist:"]
+playlistIdPrefixes = ["p:", "pl:", "playlist:"]
 
 playingNames :: [T.Text]
 playingNames = ["playing", "current"]
@@ -138,6 +139,7 @@ identifier = fmap T.pack (notFollowedBy (optionWs names) *> notFollowedBy (optio
 field1 :: Parser FieldAccess
 field1
 	=   options playlistIdPrefixes *> fmap (flip FieldAccess [] . PlaylistId . T.pack) (many alphaNumChar)
+	<|> try (chunk "spotify:user:" *> takeWhileP (Just "spotify username") ((&&) <$> not . isSpace <*> (/= ':')) *> ":playlist:") *> fmap (flip FieldAccess [] . PlaylistId . T.pack) (many alphaNumChar)
 	<|> optionWs playingNames *> pure (FieldAccess Playing [])
 	<|> fmap (flip FieldAccess [] . PlaylistName) identifier
 	<|> try (single '(' *> ws *> field <* ws <* single ')')
