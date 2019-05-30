@@ -41,9 +41,9 @@ start = do
 	let ctxPath = home <> "/.config/sepo"
 	token <- T.readFile $ ctxPath <> "/token"
 	ctxTokenRef <- newIORef token
-	ctxClientId <- T.readFile $ ctxPath <> "/client-id"
-	ctxClientSecret <- T.readFile $ ctxPath <> "/client-secret"
-	ctxRefreshToken <- T.readFile $ ctxPath <> "/refresh-token"
+	ctxClientId <- fmap (head . T.lines) $ T.readFile $ ctxPath <> "/client-id"
+	ctxClientSecret <- fmap (head . T.lines) $ T.readFile $ ctxPath <> "/client-secret"
+	ctxRefreshToken <- fmap (head . T.lines) $ T.readFile $ ctxPath <> "/refresh-token"
 	pure $ Ctx {..}
 
 run :: Ctx -> (Client -> ClientM a) -> IO (Either ServantError a)
