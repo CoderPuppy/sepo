@@ -32,7 +32,8 @@ main = do
 	for_ (tracksList tracks) $ \track -> T.putStrLn $ mconcat [
 			trackName track,
 			" by ", formatList "no-one" $ fmap artistName $ trackArtists track,
-			" from ", albumName $ trackAlbum track
+			" from ", albumName $ trackAlbum track,
+			" (", trackId track, ")"
 		]
 
 formatList :: (IsString a, Semigroup a, Foldable f) => a -> f a -> a
