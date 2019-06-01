@@ -232,7 +232,7 @@ executeCmd ctx (ArtistId ar_id) = do
 					(HTTP.getAlbumTracks client $ HTTP.albumId album)
 					(HTTP.albumTracks album)
 				pure $ fmap (httpTrackS $ httpAlbum album) tracks
-			pure $ Unordered $ M.fromList $ fmap (, 1) $ join trackss
+			pure $ Unordered $ M.fromList $ fmap (, 1) $ filter (any ((== ar_id) . artistId) . trackArtists) $ join trackss
 			,
 		existing = Just $ ExArtist $ httpArtistS artist
 	}
