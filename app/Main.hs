@@ -15,14 +15,13 @@ main :: IO ()
 main = do
 	args <- getArgs
 	let txt = T.intercalate " " $ fmap T.pack args
-	T.putStrLn txt
 	cmd <- case runParser (cmd <* eof) "cmdline" txt of
 		Left err -> do
 			putStrLn "Parse error"
 			putStr $ errorBundlePretty err
 			exitFailure
 		Right cmd -> pure cmd
-	print cmd
+	T.putStrLn $ reify PSeq cmd
 	ctx <- start
 	val <- executeCmd ctx cmd
 	tracks <- force $ tracks val
