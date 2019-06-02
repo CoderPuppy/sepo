@@ -1,28 +1,39 @@
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Sepo.Execution where
 
+import Control.Applicative (liftA2)
+import Control.Monad (join)
+import Data.Aeson.TH (deriveJSON, defaultOptions, fieldLabelModifier, sumEncoding, SumEncoding(UntaggedValue))
+import Data.Char (toLower)
+import Data.Foldable (find, for_)
+import Data.List (stripPrefix)
+import Data.List.Split (chunksOf)
+import Data.Maybe (fromJust, fromMaybe, listToMaybe)
+import Data.Traversable (for)
 import Prelude hiding (subtract)
-import Control.Applicative
-import Control.Concurrent.Async
-import Control.Monad
-import Data.Bifunctor
-import Data.Foldable
-import Data.List.Split
-import Data.Maybe
-import Data.Traversable
 import Sepo.AST
+import Sepo.Parser
+import System.Environment (getEnv)
+import System.Directory (createDirectoryIfMissing)
 import qualified DBus.Client as DBus (Client, connectSession)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
+import qualified Data.Text.IO as T
 import qualified Sepo.DBusClient as DBus
 import qualified Sepo.WebClient as HTTP
+import Data.Ini as Ini
+import Text.Megaparsec
+import Text.Megaparsec.Char
 
 data Context = Context {
 	httpCtx :: HTTP.Ctx,
 	dbusClient :: DBus.Client,
-	httpUser :: HTTP.User
+	httpUser :: HTTP.User,
+	aliasesPath :: FilePath,
+	aliases :: M.Map (Either T.Text T.Text) Cmd
 }
 
 start :: IO Context
@@ -30,6 +41,16 @@ start = do
 	httpCtx <- HTTP.start
 	dbusClient <- DBus.connectSession
 	httpUser <- HTTP.run_ httpCtx HTTP.getUser
+	home <- getEnv "HOME"
+	let aliasesPath = home <> "/.config/sepo/aliases"
+	aliases <- do
+		txt <- T.readFile aliasesPath
+		let
+			p = fmap M.fromList $ many $ (,) <$> f <* ws <* chunk "=" <* ws <*> cmd5 <* ws <* single ';' <* ws
+			f = chunk "spotify:playlist:" *> fmap (Left . T.pack) (many alphaNumChar) <|> chunk "_" *> fmap Right quoted
+		case runParser p aliasesPath txt of
+			Left err -> fail $ errorBundlePretty err
+			Right v -> pure v
 	pure $ Context {..}
 
 type MultiSet a = M.Map a Int
@@ -154,6 +175,9 @@ executeField ctx (PlaylistId pl_id) = do
 executeField ctx (PlaylistName name) = do
 	pl <- findPlaylist ctx name >>= maybe (fail $ "unknown playlist: " <> T.unpack name) pure
 	executeField ctx $ PlaylistId $ HTTP.playlistSId pl
+executeField ctx (AliasName name) = do
+	alias <- maybe (fail $ "unknown alias: " <> T.unpack name) pure $ M.lookup (Right name) $ aliases ctx
+	executeCmd ctx alias
 executeField ctx Playing = do
 	currentlyPlaying <- HTTP.run_ (httpCtx ctx) HTTP.getCurrentlyPlaying
 	context <- maybe (fail "incognito?") pure $ HTTP.currentlyPlayingContext currentlyPlaying
@@ -162,8 +186,9 @@ executeField ctx Playing = do
 		HTTP.CTAlbum -> executeCmd ctx $ AlbumId $ (!! 2) $ T.splitOn ":" $ HTTP.contextURI context
 		HTTP.CTArtist -> executeCmd ctx $ ArtistId $ (!! 2) $ T.splitOn ":" $ HTTP.contextURI context
 
-executeFieldAssignment :: Context -> Field -> Value -> IO Value
-executeFieldAssignment ctx (PlaylistId pl_id) val = do
+executeFieldAssignment :: Context -> Field -> Cmd -> IO Value
+executeFieldAssignment ctx (PlaylistId pl_id) cmd = do
+	val <- executeCmd ctx cmd
 	playlist <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.getPlaylist client pl_id
 	tracks <- force $ tracks val
 	let chunks = chunksOf 100 $ tracksList tracks
@@ -172,34 +197,34 @@ executeFieldAssignment ctx (PlaylistId pl_id) val = do
 	for_ (drop 1 chunks) $ \chunk -> do
 		HTTP.run_ (httpCtx ctx) $ \client -> HTTP.addTracks client pl_id $ HTTP.AddTracks
 			(fmap (("spotify:track:" <>) . trackId) chunk) Nothing
+	T.appendFile (aliasesPath ctx) $ "spotify:playlist:" <> pl_id <> " = " <> reify PPrefix cmd <> ";\n"
 	pure $ val { existing = Just $ ExPlaylist $ httpPlaylist playlist }
-executeFieldAssignment ctx (PlaylistName name) val = do
+executeFieldAssignment ctx (PlaylistName name) cmd = do
 	pl_id <- findPlaylist ctx name >>= \case
 		Just pl -> pure $ HTTP.playlistSId pl
 		Nothing -> do
 			pl <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.createPlaylist client (HTTP.userId $ httpUser ctx) $ HTTP.CreatePlaylist
 				name Nothing Nothing (Just "created by Sepo")
 			pure $ HTTP.playlistId pl
-	executeFieldAssignment ctx (PlaylistId pl_id) val
-executeFieldAssignment ctx Playing val@(Value _ (Just (ExPlaylist pl))) = do
-	DBus.play (dbusClient ctx) ("spotify:playlist:" <> playlistId pl)
+	executeFieldAssignment ctx (PlaylistId pl_id) cmd
+executeFieldAssignment ctx (AliasName name) cmd = do
+	val <- executeCmd ctx cmd
+	T.appendFile (aliasesPath ctx) $ "_" <> reifyQuoted name <> " = " <> reify PPrefix cmd <> ";\n"
 	pure val
-executeFieldAssignment ctx Playing val@(Value _ (Just (ExAlbum al))) = do
-	DBus.play (dbusClient ctx) ("spotify:album:" <> albumId al)
+executeFieldAssignment ctx Playing cmd = do
+	val <- executeCmd ctx cmd
+	case val of
+		Value _ (Just (ExPlaylist pl)) -> DBus.play (dbusClient ctx) ("spotify:playlist:" <> playlistId pl)
+		Value _ (Just (ExAlbum al)) -> DBus.play (dbusClient ctx) ("spotify:album:" <> albumId al)
+		Value _ (Just (ExArtist ar)) -> DBus.play (dbusClient ctx) ("spotify:artist:" <> artistId ar)
+		_ -> fail "TODO: play"
 	pure val
-executeFieldAssignment ctx Playing val@(Value _ (Just (ExArtist ar))) = do
-	DBus.play (dbusClient ctx) ("spotify:artist:" <> artistId ar)
-	pure val
-executeFieldAssignment ctx Playing val = fail $ "TODO: play"
 
 executeCmd :: Context -> Cmd -> IO Value
 executeCmd ctx (Field (FieldAccess field [])) = executeField ctx field
-executeCmd ctx (Field (FieldAccess field [cmd])) = do
-	val <- executeCmd ctx cmd
-	executeFieldAssignment ctx field val
+executeCmd ctx (Field (FieldAccess field [cmd])) = executeFieldAssignment ctx field cmd
 executeCmd ctx (Field (FieldAccess field (cmd:cmds))) = do
-	val <- executeCmd ctx cmd
-	executeFieldAssignment ctx field val
+	executeFieldAssignment ctx field cmd
 	executeCmd ctx $ Field $ FieldAccess field cmds
 executeCmd ctx (TrackId tr_id) = pure $ Value {
 		tracks = Lazy $ do

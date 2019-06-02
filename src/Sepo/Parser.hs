@@ -11,8 +11,11 @@ import Text.Megaparsec hiding (many, some)
 import Text.Megaparsec.Char
 import qualified Data.Text as T
 
+aliasPrefixes :: [T.Text]
+aliasPrefixes = ["_"]
+
 playlistIdPrefixes :: [T.Text]
-playlistIdPrefixes = ["p:", "pl:", "playlist:"]
+playlistIdPrefixes = ["p:", "pl:", "playlist:", "spotify:playlist:"]
 
 playingNames :: [T.Text]
 playingNames = ["playing", "current"]
@@ -48,22 +51,22 @@ assignIntersectOps :: [T.Text]
 assignIntersectOps = ["&=", "&&=", "∩=", "∧="]
 
 concatOps :: [T.Text]
-concatOps = ["+", "++", "|", "||", "∪", "∨"]
+concatOps = ["++", "+", "||", "|", "∪", "∨"]
 
 subtractOps :: [T.Text]
-subtractOps = ["-", "--", "\\"]
+subtractOps = ["--", "-", "\\"]
 
 intersectOps :: [T.Text]
 intersectOps = ["&", "&&", "∩", "∧"]
 
 uniqueNames :: [T.Text]
-uniqueNames = ["u", "uniq", "unique"]
+uniqueNames = ["unique", "uniq", "u"]
 
 shuffleNames :: [T.Text]
-shuffleNames = ["s", "shuf", "shuffle"]
+shuffleNames = ["shuffle", "shuf", "s"]
 
 fieldAssignOps :: [T.Text]
-fieldAssignOps = ["!", "!="]
+fieldAssignOps = ["!=", "!"]
 
 fieldAssignConcatOps :: [T.Text]
 fieldAssignConcatOps = fmap (mappend "!") (concatOps ++ assignConcatOps)
@@ -91,6 +94,7 @@ names = join [
 
 prefixes :: [T.Text]
 prefixes = join [
+		aliasPrefixes,
 		playlistIdPrefixes,
 		trackIdPrefixes,
 		albumIdPrefixes,
@@ -112,10 +116,10 @@ options :: [T.Text] -> Parser ()
 options = asum . fmap (void . chunk)
 
 optionWs :: [T.Text] -> Parser ()
-optionWs = asum . fmap (void . word . chunk)
+optionWs = word . asum . fmap (void . chunk)
 
 optionOs :: [T.Text] -> Parser ()
-optionOs = asum . fmap (void . operator . chunk)
+optionOs = operator . asum . fmap (void . chunk)
 
 quotedEscape :: Parser Char
 quotedEscape = single '\\' *> (
@@ -134,13 +138,14 @@ quoted
 	<|> single '"'  *> quotedInner (void $ single '"' ) <* single '"'
 
 identifier :: Parser T.Text
-identifier = fmap T.pack (notFollowedBy (optionWs names) *> notFollowedBy (options prefixes) *> some alphaNumChar <* notFollowedBy alphaNumChar) <|> quoted
+identifier = notFollowedBy (optionWs names) *> notFollowedBy (options prefixes) *> fmap T.pack (some alphaNumChar) <* notFollowedBy alphaNumChar <|> quoted
 
 field1 :: Parser FieldAccess
 field1
 	=   options playlistIdPrefixes *> fmap (flip FieldAccess [] . PlaylistId . T.pack) (many alphaNumChar)
 	<|> try (chunk "spotify:user:" *> takeWhileP (Just "spotify username") ((&&) <$> not . isSpace <*> (/= ':')) *> ":playlist:") *> fmap (flip FieldAccess [] . PlaylistId . T.pack) (many alphaNumChar)
 	<|> optionWs playingNames *> pure (FieldAccess Playing [])
+	<|> options aliasPrefixes *> fmap (flip FieldAccess [] . AliasName) (fmap T.pack (some alphaNumChar) <|> quoted)
 	<|> fmap (flip FieldAccess [] . PlaylistName) identifier
 	<|> try (single '(' *> ws *> field <* ws <* single ')')
 
@@ -190,22 +195,22 @@ cmd2 :: Parser Cmd
 cmd2 = fmap Field field2 <|> cmd1
 
 cmd3 :: Parser Cmd
-cmd3 = liftA2 (foldl (flip ($))) (cmd2 <* ws) (asum [
-		some $ fmap flip partUD <*> (ws *> cmd2 <* ws),
-		some $ fmap flip partI  <*> (ws *> cmd2 <* ws),
-		pure []
-	])
+cmd3 = liftA2 (foldl (flip ($))) (cmd2 <* ws) $ many $ fmap flip part <*> (ws *> cmd2 <* ws)
+	where 
+		part :: Parser (Cmd -> Cmd -> Cmd)
+		part = optionOs intersectOps *> pure Intersect
+
+cmd4 :: Parser Cmd
+cmd4 = liftA2 (foldl (flip ($))) (cmd3 <* ws) $ many $ fmap flip part <*> (ws *> cmd3 <* ws)
 	where
-		partUD :: Parser (Cmd -> Cmd -> Cmd)
-		partUD
+		part :: Parser (Cmd -> Cmd -> Cmd)
+		part
 			=   optionOs concatOps *> pure Concat
 			<|> optionOs subtractOps *> pure Subtract
 
-		partI :: Parser (Cmd -> Cmd -> Cmd)
-		partI = optionOs intersectOps *> pure Intersect
 
-cmd4 :: Parser Cmd
-cmd4 = flip (foldr ($)) <$> many (part <* ws) <*> cmd3
+cmd5 :: Parser Cmd
+cmd5 = flip (foldr ($)) <$> many (part <* ws) <*> cmd4
 	where
 		part :: Parser (Cmd -> Cmd)
 		part
@@ -218,8 +223,8 @@ cmd4 = flip (foldr ($)) <$> many (part <* ws) <*> cmd3
 			<|> try ((Field .) . assConcat <$> field <* ws <* optionOs assignConcatOps)
 			<|> try ((Field .) . assSubtract <$> field <* ws <* optionOs assignSubtractOps)
 
-cmd5 :: Parser Cmd
-cmd5 = foldr Seq <$> (cmd4 <* ws) <*> many (optionOs seqOps *> ws *> cmd4)
+cmd6 :: Parser Cmd
+cmd6 = foldr Seq <$> (cmd5 <* ws) <*> many (optionOs seqOps *> ws *> cmd5)
 
 cmd :: Parser Cmd
-cmd = cmd5
+cmd = cmd6
