@@ -7,7 +7,7 @@ import Control.Applicative (liftA2)
 import Control.Monad (join)
 import Data.Aeson (encodeFile, decodeFileStrict)
 import Data.Aeson.TH (deriveJSON, defaultOptions, fieldLabelModifier, sumEncoding, SumEncoding(UntaggedValue))
-import Data.Char (toLower)
+import Data.Char (toLower, isAlphaNum)
 import Data.Foldable (find, for_)
 import Data.Either (partitionEithers)
 import Data.List (stripPrefix)
@@ -64,7 +64,7 @@ start = do
 				txt <- T.readFile aliasesPath
 				let
 					p = fmap M.fromList $ many $ (,) <$> f <* ws <* chunk "=" <* ws <*> cmd5 <* ws <* single ';' <* ws
-					f = chunk "spotify:playlist:" *> fmap (Left . T.pack) (many alphaNumChar) <|> chunk "_" *> fmap Right quoted
+					f = chunk "spotify:playlist:" *> fmap Left (takeWhileP (Just "playlist id") isAlphaNum) <|> chunk "_" *> fmap Right quoted
 				case runParser p aliasesPath txt of
 					Left err -> do
 						putStrLn $ errorBundlePretty err

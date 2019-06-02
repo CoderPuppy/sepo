@@ -138,14 +138,14 @@ quoted
 	<|> single '"'  *> quotedInner (void $ single '"' ) <* single '"'
 
 identifier :: Parser T.Text
-identifier = notFollowedBy (optionWs names) *> notFollowedBy (options prefixes) *> fmap T.pack (some alphaNumChar) <* notFollowedBy alphaNumChar <|> quoted
+identifier = notFollowedBy (optionWs names) *> notFollowedBy (options prefixes) *> takeWhile1P (Just "identifier") isAlphaNum <* notFollowedBy alphaNumChar <|> quoted
 
 field1 :: Parser FieldAccess
 field1
-	=   options playlistIdPrefixes *> fmap (flip FieldAccess [] . PlaylistId . T.pack) (many alphaNumChar)
-	<|> try (chunk "spotify:user:" *> takeWhileP (Just "spotify username") ((&&) <$> not . isSpace <*> (/= ':')) *> ":playlist:") *> fmap (flip FieldAccess [] . PlaylistId . T.pack) (many alphaNumChar)
+	=   options playlistIdPrefixes *> fmap (flip FieldAccess [] . PlaylistId) (takeWhileP (Just "playlist id") isAlphaNum)
+	<|> try (chunk "spotify:user:" *> takeWhileP (Just "spotify username") ((&&) <$> not . isSpace <*> (/= ':')) *> ":playlist:") *> fmap (flip FieldAccess [] . PlaylistId) (takeWhileP (Just "playlist id") isAlphaNum)
 	<|> optionWs playingNames *> pure (FieldAccess Playing [])
-	<|> options aliasPrefixes *> fmap (flip FieldAccess [] . AliasName) (fmap T.pack (some alphaNumChar) <|> quoted)
+	<|> options aliasPrefixes *> fmap (flip FieldAccess [] . AliasName) (takeWhile1P (Just "alias") isAlphaNum <|> quoted)
 	<|> fmap (flip FieldAccess [] . PlaylistName) identifier
 	<|> try (single '(' *> ws *> field <* ws <* single ')')
 
@@ -183,9 +183,9 @@ compoundProcess parts = go parts Empty
 cmd1 :: Parser Cmd
 cmd1
 	=   fmap Field field1
-	<|> options trackIdPrefixes *> fmap (TrackId . T.pack) (many alphaNumChar)
-	<|> options albumIdPrefixes *> fmap (AlbumId . T.pack) (many alphaNumChar)
-	<|> options artistIdPrefixes *> fmap (ArtistId . T.pack) (many alphaNumChar)
+	<|> options trackIdPrefixes *> fmap TrackId (takeWhileP (Just "track id") isAlphaNum)
+	<|> options albumIdPrefixes *> fmap AlbumId (takeWhileP (Just "album id") isAlphaNum)
+	<|> options artistIdPrefixes *> fmap ArtistId (takeWhileP (Just "artist id") isAlphaNum)
 	<|> optionWs playingSongNames *> pure PlayingSong
 	<|> single '(' *> ws *> cmd <* ws <* single ')'
 	<|> fmap compoundProcess compound
