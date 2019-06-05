@@ -84,7 +84,7 @@ instance Reify Cmd where
 	reify d (TrackId tr_id) = "spotify:track:" <> tr_id
 	reify d (AlbumId al_id) = "spotify:album:" <> al_id
 	reify d (ArtistId ar_id) = "spotify:artist:" <> ar_id
-	reify d PlayingSong = "playing/song"
+	reify d PlayingSong = "playing_song"
 	reify d Empty = "empty"
 	reify d (Seq a b) = parens (d > PSeq) $ reify PSeq a <> "; " <> reify PSeq b
 	reify d (Concat a b) = parens (d > PPosNeg) $ reify PPosNeg a <> " + " <> reify PPosNeg b

@@ -30,7 +30,7 @@ artistIdPrefixes :: [T.Text]
 artistIdPrefixes = ["ar:", "artist:", "spotify:artist:"]
 
 playingSongNames :: [T.Text]
-playingSongNames = ["playing/song", "current/song"]
+playingSongNames = ["playing_song", "current_song"]
 
 emptyNames :: [T.Text]
 emptyNames = ["empty", "ε"]
@@ -106,20 +106,23 @@ type Parser = Parsec Void T.Text
 ws :: Parser ()
 ws = void $ many spaceChar
 
+isWordChar :: Char -> Bool
+isWordChar c = isAlphaNum c || c == '_'
+
 word :: Parser a -> Parser a
-word p = try $ p <* notFollowedBy alphaNumChar
+word p = try $ p <* notFollowedBy (satisfy isWordChar)
 
 operator :: Parser a -> Parser a
-operator p = try $ p <* lookAhead (eof <|> void spaceChar <|> void alphaNumChar)
+operator p = try $ p <* lookAhead (eof <|> void spaceChar <|> void (satisfy isWordChar))
 
 options :: [T.Text] -> Parser ()
 options = asum . fmap (void . chunk)
 
 optionWs :: [T.Text] -> Parser ()
-optionWs = word . asum . fmap (void . chunk)
+optionWs = asum . fmap (void . word . chunk)
 
 optionOs :: [T.Text] -> Parser ()
-optionOs = operator . asum . fmap (void . chunk)
+optionOs = asum . fmap (void . operator . chunk)
 
 quotedEscape :: Parser Char
 quotedEscape = single '\\' *> (
@@ -138,14 +141,14 @@ quoted
 	<|> single '"'  *> quotedInner (void $ single '"' ) <* single '"'
 
 identifier :: Parser T.Text
-identifier = notFollowedBy (optionWs names) *> notFollowedBy (options prefixes) *> takeWhile1P (Just "identifier") isAlphaNum <* notFollowedBy alphaNumChar <|> quoted
+identifier = notFollowedBy (optionWs names) *> notFollowedBy (options prefixes) *> takeWhile1P (Just "identifier") isWordChar <* notFollowedBy (satisfy isWordChar) <|> quoted
 
 field1 :: Parser FieldAccess
 field1
 	=   options playlistIdPrefixes *> fmap (flip FieldAccess [] . PlaylistId) (takeWhileP (Just "playlist id") isAlphaNum)
 	<|> try (chunk "spotify:user:" *> takeWhileP (Just "spotify username") ((&&) <$> not . isSpace <*> (/= ':')) *> ":playlist:") *> fmap (flip FieldAccess [] . PlaylistId) (takeWhileP (Just "playlist id") isAlphaNum)
 	<|> optionWs playingNames *> pure (FieldAccess Playing [])
-	<|> options aliasPrefixes *> fmap (flip FieldAccess [] . AliasName) (takeWhile1P (Just "alias") isAlphaNum <|> quoted)
+	<|> options aliasPrefixes *> fmap (flip FieldAccess [] . AliasName) (takeWhile1P (Just "alias") isWordChar <|> quoted)
 	<|> fmap (flip FieldAccess [] . PlaylistName) identifier
 	<|> try (single '(' *> ws *> field <* ws <* single ')')
 
