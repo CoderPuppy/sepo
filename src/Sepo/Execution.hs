@@ -29,6 +29,9 @@ import qualified Sepo.DBusClient as DBus
 import qualified Sepo.WebClient as HTTP
 import Text.Megaparsec
 import Text.Megaparsec.Char
+import Data.Monoid (Any(..))
+import Control.Monad.Trans.Writer.CPS (runWriterT, tell)
+import Control.Monad.Trans.Class (lift)
 
 data Context = Context {
 	httpCtx :: HTTP.Ctx,
@@ -261,8 +264,24 @@ executeFieldAssignment ctx (PlaylistName name) cmd = do
 	executeFieldAssignment ctx (PlaylistId pl_id) cmd
 executeFieldAssignment ctx (AliasName name) cmd = do
 	val <- executeCmd ctx cmd
-	T.appendFile (aliasesPath ctx) $ "_" <> reifyQuoted name <> " = " <> reify PPrefix cmd <> ";\n"
-	modifyIORef (aliases ctx) $ M.insert (Right name) cmd
+	let
+		go nms cmd@(Field (FieldAccess (AliasName nm) [])) = do
+			cmd' <- lift $ readIORef (aliases ctx) >>= maybe (fail $ "unknown alias: " <> T.unpack nm) pure . M.lookup (Right nm)
+			(cmd'', changed) <- lift $ runWriterT $ go (S.insert nm nms) cmd'
+			let changed' = changed <> Any (S.member nm nms)
+			tell changed'
+			pure $ if getAny changed' then cmd'' else cmd
+		go nms (Field (FieldAccess f cmds)) = fmap (Field . FieldAccess f) $ traverse (go nms) cmds
+		go nms (Seq a b) = Seq <$> go nms a <*> go nms b
+		go nms (Concat a b) = Concat <$> go nms a <*> go nms b
+		go nms (Subtract a b) = Subtract <$> go nms a <*> go nms b
+		go nms (Intersect a b) = Intersect <$> go nms a <*> go nms b
+		go nms (Unique a) = fmap Unique $ go nms a
+		go nms (Shuffle a) = fmap Shuffle $ go nms a
+		go nms c = pure c
+	(cmd', changed) <- runWriterT $ go (S.singleton name) cmd
+	T.appendFile (aliasesPath ctx) $ "_" <> reifyQuoted name <> " = " <> reify PPrefix cmd' <> ";\n"
+	modifyIORef (aliases ctx) $ M.insert (Right name) cmd'
 	pure val
 executeFieldAssignment ctx Playing cmd = do
 	val <- executeCmd ctx cmd
