@@ -499,6 +499,9 @@ subtract a b = Filter {
 	}
 
 compileFilter :: Context -> Cmd -> IO Filter
+compileFilter ctx (Field (FieldAccess (AliasName name) [])) = do
+	alias <- readIORef (aliases ctx) >>= maybe (fail $ "unknown alias: " <> T.unpack name) pure . M.lookup (Right name)
+	compileFilter ctx alias
 compileFilter ctx (TrackId tr_id) = pure $ mempty { filterPosPred = \track -> (== tr_id) $ trackId track }
 compileFilter ctx (AlbumId al_id) = pure $ mempty { filterPosPred = \track -> (== al_id) $ albumId $ trackAlbum track }
 compileFilter ctx (ArtistId ar_id) = pure $ mempty { filterPosPred = \track -> elem ar_id $ fmap artistId $ trackArtists track }
