@@ -231,7 +231,7 @@ executeField ctx Playing = do
 	currentlyPlaying <- HTTP.run_ (httpCtx ctx) HTTP.getCurrentlyPlaying
 	context <- maybe (fail "incognito?") pure $ HTTP.currentlyPlayingContext currentlyPlaying
 	case HTTP.contextType context of
-		HTTP.CTPlaylist -> executeField ctx $ PlaylistId $ (!! 4) $ T.splitOn ":" $ HTTP.contextURI context
+		HTTP.CTPlaylist -> executeField ctx $ PlaylistId $ (!! 2) $ T.splitOn ":" $ HTTP.contextURI context
 		HTTP.CTAlbum -> executeCmd ctx $ AlbumId $ (!! 2) $ T.splitOn ":" $ HTTP.contextURI context
 		HTTP.CTArtist -> executeCmd ctx $ ArtistId $ (!! 2) $ T.splitOn ":" $ HTTP.contextURI context
 
