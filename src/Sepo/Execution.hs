@@ -398,7 +398,7 @@ executeCmd ctx (Intersect a b) = do
 		pure $ case tracks of
 			Ordered tracks -> Ordered $ filter (apply b) tracks
 			Unordered tracks -> Unordered $ applyIntersect b tracks
-	pure $ a { tracks = tracks' }
+	pure $ Value tracks' Nothing
 executeCmd ctx (Subtract a b) = do
 	a <- executeCmd ctx a
 	tracks' <- joinThunk $ flip fmap (tracks a) $ \tracks -> do
@@ -406,7 +406,7 @@ executeCmd ctx (Subtract a b) = do
 		pure $ case tracks of
 			Ordered tracks -> Ordered $ filter (not . apply b) tracks
 			Unordered tracks -> Unordered $ applySubtract b tracks
-	pure $ a { tracks = tracks' }
+	pure $ Value tracks' Nothing
 executeCmd ctx (Unique cmd) = do
 	val <- executeCmd ctx cmd
 	pure $ Value (fmap (Unordered . M.map (const 1) . tracksSet) $ tracks val) Nothing
