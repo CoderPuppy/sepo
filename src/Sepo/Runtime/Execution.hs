@@ -1,37 +1,35 @@
 {-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE TemplateHaskell #-}
 
-module Sepo.Execution where
+module Sepo.Runtime.Execution where
 
-import Control.Applicative (liftA2)
 import Control.Monad (join)
+import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Writer.CPS (runWriterT, tell)
 import Data.Aeson (encodeFile, decodeFileStrict)
-import Data.Aeson.TH (deriveJSON, defaultOptions, fieldLabelModifier, sumEncoding, SumEncoding(UntaggedValue))
-import Data.Char (toLower, isAlphaNum)
-import Data.Foldable (find, for_)
+import Data.Char (isAlphaNum)
 import Data.Either (partitionEithers)
-import Data.List (stripPrefix)
-import Data.List.Split (chunksOf)
-import Data.Maybe (fromJust, fromMaybe, listToMaybe)
-import Data.Traversable (for)
+import Data.Foldable (find, for_)
 import Data.IORef
+import Data.List.Split (chunksOf)
+import Data.Maybe (fromMaybe, listToMaybe)
+import Data.Monoid (Any(..))
+import Data.Traversable (for)
 import Prelude hiding (subtract)
 import Sepo.AST
 import Sepo.Parser
-import System.Environment (getEnv)
+import Sepo.Runtime.Values
 import System.Directory (createDirectoryIfMissing, doesFileExist)
+import System.Environment (getEnv)
+import Text.Megaparsec
+import Text.Megaparsec.Char
 import qualified DBus.Client as DBus (Client, connectSession)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Sepo.DBusClient as DBus
+import qualified Sepo.Runtime.Filter as Filter
 import qualified Sepo.WebClient as HTTP
-import Text.Megaparsec
-import Text.Megaparsec.Char
-import Data.Monoid (Any(..))
-import Control.Monad.Trans.Writer.CPS (runWriterT, tell)
-import Control.Monad.Trans.Class (lift)
 
 data Context = Context {
 	httpCtx :: HTTP.Ctx,
@@ -78,125 +76,6 @@ start = do
 				newIORef M.empty
 	pure $ Context {..}
 
-type MultiSet a = M.Map a Int
-msToL :: MultiSet a -> [a]
-msToL ms = M.assocs ms >>= uncurry (flip replicate)
-
-data Playlist = Playlist {
-	playlistId :: T.Text,
-	playlistName :: T.Text
-} deriving (Eq, Ord, Show)
-
-data Artist = Artist {
-	artistId :: T.Text,
-	artistName :: T.Text
-} deriving (Eq, Ord, Show)
-$(deriveJSON defaultOptions {
-	fieldLabelModifier = fmap toLower . fromJust . stripPrefix "artist",
-	sumEncoding = UntaggedValue
-} 'Artist)
-
-data Album = Album {
-	albumId :: T.Text,
-	albumName :: T.Text,
-	albumArtists :: [Artist]
-} deriving (Eq, Ord, Show)
-$(deriveJSON defaultOptions {
-	fieldLabelModifier = fmap toLower . fromJust . stripPrefix "album",
-	sumEncoding = UntaggedValue
-} 'Album)
-
-data Track = Track {
-	trackId :: T.Text,
-	trackName :: T.Text,
-	trackAlbum :: Album,
-	trackArtists :: [Artist],
-	trackExplicit :: Bool
-} deriving (Eq, Ord, Show)
-$(deriveJSON defaultOptions {
-	fieldLabelModifier = fmap toLower . fromJust . stripPrefix "track",
-	sumEncoding = UntaggedValue
-} 'Track)
-
-data Tracks = Ordered [Track] | Unordered (MultiSet Track) deriving (Show)
-instance Applicative Thunk where
-	pure = Strict
-	Strict f <*> Strict a = Strict $ f a
-	Strict f <*> Lazy a = Lazy $ f <$> a
-	Lazy f <*> Strict a = Lazy $ ($ a) <$> f
-	Lazy f <*> Lazy a = Lazy $ f <*> a
-
-data Existing = ExPlaylist Playlist | ExAlbum Album | ExArtist Artist deriving (Show)
-data Value = Value {
-	tracks :: Thunk Tracks,
-	existing :: Maybe Existing
-}
-
-data Thunk a = Strict a | Lazy (IO a) deriving (Functor)
-force :: Thunk a -> IO a
-force (Strict v) = pure v
-force (Lazy thunk) = thunk
-joinThunk :: Thunk (IO a) -> IO (Thunk a)
-joinThunk (Strict m) = fmap Strict m
-joinThunk (Lazy m) = pure $ Lazy $ join m
-
-tracksList :: Tracks -> [Track]
-tracksList (Ordered tracks) = tracks
-tracksList (Unordered tracks) = msToL tracks
-
-tracksSet :: Tracks -> MultiSet Track
-tracksSet (Ordered tracks) = M.fromListWith (+) $ fmap (, 1) tracks
-tracksSet (Unordered tracks) = tracks
-
-httpPlaylist :: HTTP.Playlist -> Playlist
-httpPlaylist playlist = Playlist {
-		playlistId = HTTP.playlistId playlist,
-		playlistName = HTTP.playlistName playlist
-	}
-
-httpPlaylistS :: HTTP.PlaylistS -> Playlist
-httpPlaylistS playlist = Playlist {
-		playlistId = HTTP.playlistSId playlist,
-		playlistName = HTTP.playlistSName playlist
-	}
-
-httpArtistS :: HTTP.ArtistS -> Artist
-httpArtistS artist = Artist {
-		artistId = HTTP.artistSId artist,
-		artistName = HTTP.artistSName artist
-	}
-
-httpAlbumS :: HTTP.AlbumS -> Album
-httpAlbumS album = Album {
-		albumId = HTTP.albumSId album,
-		albumName = HTTP.albumSName album,
-		albumArtists = fmap httpArtistS $ HTTP.albumSArtists album
-	}
-
-httpAlbum :: HTTP.Album -> Album
-httpAlbum album = Album {
-		albumId = HTTP.albumId album,
-		albumName = HTTP.albumName album,
-		albumArtists = fmap httpArtistS $ HTTP.albumArtists album
-	}
-
-httpTrackS :: Album -> HTTP.TrackS -> Track
-httpTrackS album track = Track {
-		trackId = HTTP.trackSId track,
-		trackName = HTTP.trackSName track,
-		trackAlbum = album,
-		trackArtists = fmap httpArtistS $ HTTP.trackSArtists track,
-		trackExplicit = HTTP.trackSExplicit track
-	}
-
-httpTrack :: HTTP.Track -> Track
-httpTrack track = Track {
-		trackId = HTTP.trackId track,
-		trackName = HTTP.trackName track,
-		trackAlbum = httpAlbumS $ HTTP.trackAlbum track,
-		trackArtists = fmap httpArtistS $ HTTP.trackArtists track,
-		trackExplicit = HTTP.trackExplicit track
-	}
 
 findPlaylist :: Context -> T.Text -> IO (Maybe Playlist)
 findPlaylist ctx name = do
@@ -396,123 +275,37 @@ executeCmd ctx (Intersect a b) = do
 	tracks' <- joinThunk $ flip fmap (tracks a) $ \tracks -> do
 		b <- compileFilter ctx b
 		pure $ case tracks of
-			Ordered tracks -> Ordered $ filter (apply b) tracks
-			Unordered tracks -> Unordered $ applyIntersect b tracks
+			Ordered tracks -> Ordered $ filter (Filter.apply b) tracks
+			Unordered tracks -> Unordered $ Filter.applyIntersect b tracks
 	pure $ Value tracks' Nothing
 executeCmd ctx (Subtract a b) = do
 	a <- executeCmd ctx a
 	tracks' <- joinThunk $ flip fmap (tracks a) $ \tracks -> do
 		b <- compileFilter ctx b
 		pure $ case tracks of
-			Ordered tracks -> Ordered $ filter (not . apply b) tracks
-			Unordered tracks -> Unordered $ applySubtract b tracks
+			Ordered tracks -> Ordered $ filter (not . Filter.apply b) tracks
+			Unordered tracks -> Unordered $ Filter.applySubtract b tracks
 	pure $ Value tracks' Nothing
 executeCmd ctx (Unique cmd) = do
 	val <- executeCmd ctx cmd
 	pure $ Value (fmap (Unordered . M.map (const 1) . tracksSet) $ tracks val) Nothing
 executeCmd ctx (Shuffle a) = fail "TODO: shuffle"
 
-data Filter = Filter {
-	filterPosPred :: Track -> Bool,
-	filterPosSet :: MultiSet Track,
-	filterNegPred :: Track -> Bool,
-	filterNegSet :: MultiSet Track
-}
-instance Semigroup Filter where
-	a <> b = Filter {
-			filterPosPred = (||) <$> filterPosPred a <*> filterPosPred b,
-			filterPosSet = M.union (filterPosSet a) (filterPosSet b),
-			filterNegPred = (&&) <$> filterNegPred a <*> filterNegPred b,
-			filterNegSet = M.union (M.intersection (filterNegSet a) (filterNegSet b))
-				(M.union
-					(M.filterWithKey (flip $ const $ filterNegPred a) (filterNegSet b))
-					(M.filterWithKey (flip $ const $ filterNegPred b) (filterNegSet a)))
-		}
-instance Monoid Filter where
-	mempty = Filter (const False) M.empty (const True) M.empty
-
-apply :: Filter -> Track -> Bool
-apply (Filter {..}) track = filterPosPred track || M.member track filterPosSet || not (filterNegPred track || M.member track filterNegSet)
-
-applyIntersect :: Filter -> M.Map Track a -> M.Map Track a
-applyIntersect (Filter {..}) m = M.union
-	(M.union
-		(M.filterWithKey (flip $ const filterPosPred) m)
-		(M.intersection m filterPosSet))
-	(M.filterWithKey (flip $ const $ not . filterNegPred) $
-		M.difference m filterNegSet)
-
-applySubtract :: Filter -> M.Map Track a -> M.Map Track a
-applySubtract (Filter {..}) m = M.union
-	(M.filterWithKey (flip $ const $ not . filterPosPred) $
-		M.intersection m' filterNegSet)
-	(M.filterWithKey (flip $ const $ (&&) <$> filterNegPred <*> not . filterPosPred) m')
-	where m' = M.difference m filterPosSet
-
-union :: Filter -> Filter -> Filter
-union = (<>)
-
-intersect :: Filter -> Filter -> Filter
-intersect a b = Filter {
-		filterPosPred = (&&) <$> filterPosPred a <*> filterPosPred b,
-		filterPosSet = foldl M.union M.empty [
-				M.filterWithKey (flip $ const $ filterPosPred a) (filterPosSet b),
-				M.filterWithKey (flip $ const $ filterPosPred b) (filterPosSet a),
-				M.intersection (filterPosSet a) (filterPosSet b),
-				M.filterWithKey (flip $ const $ not . filterNegPred b) $
-					M.difference (filterPosSet a) (filterNegSet b),
-				M.filterWithKey (flip $ const $ not . filterNegPred a) $
-					M.difference (filterPosSet b) (filterNegSet a)
-			],
-		filterNegPred = foldl (liftA2 (||)) (const False) [
-				(&&) <$> filterNegPred a <*> filterNegPred b,
-				(&&) <$> (not <$> filterPosPred a) <*> filterNegPred a,
-				(&&) <$> (not <$> filterPosPred b) <*> filterNegPred b
-			],
-		filterNegSet = foldl M.union M.empty [
-				-- M.filterWithKey (flip $ const $ not . filterPosPred a) (filterNegSet a),
-				-- M.filterWithKey (flip $ const $ not . filterPosPred b) (filterNegSet b),
-				-- M.filterWithKey (flip $ const $ filterNegPred a) (filterNegSet b),
-				-- M.filterWithKey (flip $ const $ filterNegPred b) (filterNegSet a),
-				M.filterWithKey (flip $ const $ (||) <$> filterNegPred b <*> not . filterPosPred a) (filterNegSet a),
-				M.filterWithKey (flip $ const $ (||) <$> filterNegPred a <*> not . filterPosPred b) (filterNegSet b),
-				M.intersection (filterNegSet a) (filterNegSet b)
-			]
-	}
-
-subtract :: Filter -> Filter -> Filter
-subtract a b = Filter {
-		filterPosPred = const False,
-		filterPosSet = M.filterWithKey (flip $ const $ not . filterPosPred b) $ flip M.difference (filterPosSet b) $ foldl M.union M.empty [
-				M.filterWithKey (flip $ const $ not . filterNegPred a) $ M.difference (filterNegSet b) (filterNegSet a),
-				M.filterWithKey (flip $ const $ filterPosPred a) (filterNegSet b),
-				M.filterWithKey (flip $ const $ filterNegPred b) (filterPosSet a),
-				M.intersection (filterPosSet a) (filterNegSet b)
-			],
-		filterNegPred = foldl (liftA2 (||)) (const False) [
-				(&&) <$> not . filterPosPred a <*> filterNegPred a,
-				not . filterNegPred b,
-				filterPosPred b
-			],
-		filterNegSet = M.union (filterPosSet b)
-			(M.filterWithKey (flip $ const $ not . filterPosPred a) (filterNegSet a))
-	}
-
-compileFilter :: Context -> Cmd -> IO Filter
+compileFilter :: Context -> Cmd -> IO Filter.Filter
 compileFilter ctx (Field (FieldAccess (AliasName name) [])) = do
 	alias <- readIORef (aliases ctx) >>= maybe (fail $ "unknown alias: " <> T.unpack name) pure . M.lookup (Right name)
 	compileFilter ctx alias
-compileFilter ctx (TrackId tr_id) = pure $ mempty { filterPosPred = \track -> (== tr_id) $ trackId track }
-compileFilter ctx (AlbumId al_id) = pure $ mempty { filterPosPred = \track -> (== al_id) $ albumId $ trackAlbum track }
-compileFilter ctx (ArtistId ar_id) = pure $ mempty { filterPosPred = \track -> elem ar_id $ fmap artistId $ trackArtists track }
+compileFilter ctx (TrackId tr_id) = pure $ mempty { Filter.posPred = \track -> (== tr_id) $ trackId track }
+compileFilter ctx (AlbumId al_id) = pure $ mempty { Filter.posPred = \track -> (== al_id) $ albumId $ trackAlbum track }
+compileFilter ctx (ArtistId ar_id) = pure $ mempty { Filter.posPred = \track -> elem ar_id $ fmap artistId $ trackArtists track }
 compileFilter ctx Empty = pure mempty
 compileFilter ctx (Seq a b) = executeCmd ctx a >> compileFilter ctx b
-compileFilter ctx (Concat a b) = union <$> compileFilter ctx a <*> compileFilter ctx b
-compileFilter ctx (Intersect a b) = intersect <$> compileFilter ctx a <*> compileFilter ctx b
-compileFilter ctx (Subtract a b) = subtract <$> compileFilter ctx a <*> compileFilter ctx b
+compileFilter ctx (Concat a b) = Filter.union <$> compileFilter ctx a <*> compileFilter ctx b
+compileFilter ctx (Intersect a b) = Filter.intersect <$> compileFilter ctx a <*> compileFilter ctx b
+compileFilter ctx (Subtract a b) = Filter.subtract <$> compileFilter ctx a <*> compileFilter ctx b
 compileFilter ctx (Unique cmd) = compileFilter ctx cmd
 compileFilter ctx (Shuffle cmd) = compileFilter ctx cmd
 compileFilter ctx cmd = do
 	val <- executeCmd ctx cmd
 	tracks <- force $ tracks val
-	pure $ mempty { filterPosSet = tracksSet tracks }
+	pure $ mempty { Filter.posSet = tracksSet tracks }

@@ -3,7 +3,8 @@ module Main where
 import Data.Foldable
 import Data.String
 import Sepo.AST
-import Sepo.Execution
+import Sepo.Runtime.Execution
+import Sepo.Runtime.Values
 import Sepo.Parser
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
