@@ -41,7 +41,10 @@ cmds = Trie.fromList [
 					trackName track,
 					" by ", formatList "no-one" $ fmap artistName $ trackArtists track,
 					" from ", albumName $ trackAlbum track,
-					" (spotify:track:", trackId track, ")"
+					" (spotify:track:", trackId track,
+					" by ", formatList "no-one" $ fmap (("spotify:artist:" <>) . artistId) $ trackArtists track,
+					" from spotify:album:", albumId $ trackAlbum track,
+					")"
 				]
 			)
 	]
