@@ -67,6 +67,7 @@ executables:
     - -with-rtsopts=-N
     dependencies:
     - sepo
+    - text-trie >= 0.2.5.0 && < 0.3
 
 tests:
   sepo-test:

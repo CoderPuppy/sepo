@@ -38,6 +38,8 @@ packages:
 # using the same syntax as the packages field.
 # (e.g., acme-missiles-0.3)
 # extra-deps: []
+extra-deps:
+  - text-trie-0.2.5.0@sha256:8064c70e67dd3db1a04f3fc002b130d167fbc4da4101919fbb0da4484a917ca5,4377
 
 # Override default flag values for local packages and extra-deps
 # flags: {}
