@@ -55,19 +55,19 @@ $(deriveJSON defaultOptions {
 data Tracks = Ordered [Track] | Unordered (MultiSet Track) deriving (Show)
 
 data Existing = ExPlaylist Playlist | ExAlbum Album | ExArtist Artist deriving (Show)
-data Value = Value {
-	tracks :: Thunk Tracks,
+data Value m = Value {
+	tracks :: Thunk m Tracks,
 	existing :: Maybe Existing
 }
 
-data Thunk a = Strict a | Lazy (IO a) deriving (Functor)
-force :: Thunk a -> IO a
+data Thunk m a = Strict a | Lazy (m a) deriving (Functor)
+force :: Applicative m => Thunk m a -> m a
 force (Strict v) = pure v
 force (Lazy thunk) = thunk
-joinThunk :: Thunk (IO a) -> IO (Thunk a)
+joinThunk :: Monad m => Thunk m (m a) -> m (Thunk m a)
 joinThunk (Strict m) = fmap Strict m
 joinThunk (Lazy m) = pure $ Lazy $ join m
-instance Applicative Thunk where
+instance Applicative m => Applicative (Thunk m) where
 	pure = Strict
 	Strict f <*> Strict a = Strict $ f a
 	Strict f <*> Lazy a = Lazy $ f <$> a

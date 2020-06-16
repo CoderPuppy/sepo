@@ -2,14 +2,16 @@
 
 module Sepo.Runtime.Query (
 	Ctx(..), start, run, Source(..),
-	dataFetch, FreerT
+	MonadFraxl(dataFetch), FreerT
 ) where
 
+import Control.Monad.Trans.Class
 import Control.Applicative
 import Control.Arrow
 import Control.Lens ((^.), set)
 import Control.Lens.TH (makeLenses)
 import Control.Monad.Fraxl
+import Control.Monad.Trans.Fraxl.Free
 import Control.Monad.IO.Class
 import Control.Monad.IO.Unlift
 import Control.Monad.State.Class (modify)
@@ -33,6 +35,9 @@ import qualified Data.Text as T
 
 import Sepo.Runtime.Values
 import qualified Sepo.WebClient as HTTP
+
+instance (Applicative f, MonadFail m) => MonadFail (FreeT f m) where
+	fail = lift . fail
 
 data Source a where
 	SCurrentUser :: Source T.Text

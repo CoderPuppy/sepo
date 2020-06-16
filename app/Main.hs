@@ -1,20 +1,23 @@
 module Main where
 
+import Control.Monad.IO.Class
 import Data.Foldable
 import Data.String
-import Sepo.AST
-import Sepo.Runtime.Execution
-import Sepo.Runtime.Values
-import Sepo.Parser
-import System.Environment (getArgs)
+import UnliftIO.Environment (getArgs)
 import System.Exit (exitFailure)
+import System.IO (stderr)
 import Text.Megaparsec (runParser, eof, errorBundlePretty)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.IO as TL
 import qualified Data.Trie.Text as Trie
-import System.IO (stderr)
+
+import Sepo.AST
+import Sepo.Runtime.Execution
+import Sepo.Runtime.Values
+import Sepo.Parser
+import qualified Sepo.Runtime.Query as Query
 
 cmds :: Trie.Trie ([T.Text] -> IO ())
 cmds = Trie.fromList [
@@ -27,25 +30,27 @@ cmds = Trie.fromList [
 					exitFailure
 				Right cmd -> pure cmd
 			T.putStrLn $ reify PSeq cmd
-			ctx <- start
-			val <- executeCmd ctx cmd
-			tracks <- force $ tracks val
-			putStrLn $ case tracks of
-				Ordered _ -> "ordered"
-				Unordered _ -> "unordered"
-			maybe (pure ()) T.putStrLn $ flip fmap (existing val) $ \case
-				ExArtist ar -> "artist " <> artistName ar <> " (spotify:artist:" <> artistId ar <> ")"
-				ExAlbum al -> "album " <> albumName al <> " featuring " <> formatList "no-one" (fmap artistName $ albumArtists al) <> " (spotify:album:" <> albumId al <> ")"
-				ExPlaylist pl -> "playlist " <> playlistName pl <> " (spotify:playlist:" <> playlistId pl <> ")"
-			for_ (tracksList tracks) $ \track -> T.putStrLn $ mconcat [
-					trackName track,
-					" by ", formatList "no-one" $ fmap artistName $ trackArtists track,
-					" from ", albumName $ trackAlbum track,
-					" (spotify:track:", trackId track,
-					" by ", formatList "no-one" $ fmap (("spotify:artist:" <>) . artistId) $ trackArtists track,
-					" from spotify:album:", albumId $ trackAlbum track,
-					")"
-				]
+			queryCtx <- Query.start
+			Query.run queryCtx $ do
+				ctx <- start $ Query.ctxHTTP queryCtx
+				val <- executeCmd ctx cmd
+				tracks <- force $ tracks val
+				liftIO $ putStrLn $ case tracks of
+					Ordered _ -> "ordered"
+					Unordered _ -> "unordered"
+				maybe (pure ()) (liftIO . T.putStrLn) $ flip fmap (existing val) $ \case
+					ExArtist ar -> "artist " <> artistName ar <> " (spotify:artist:" <> artistId ar <> ")"
+					ExAlbum al -> "album " <> albumName al <> " featuring " <> formatList "no-one" (fmap artistName $ albumArtists al) <> " (spotify:album:" <> albumId al <> ")"
+					ExPlaylist pl -> "playlist " <> playlistName pl <> " (spotify:playlist:" <> playlistId pl <> ")"
+				for_ (tracksList tracks) $ \track -> liftIO $ T.putStrLn $ mconcat [
+						trackName track,
+						" by ", formatList "no-one" $ fmap artistName $ trackArtists track,
+						" from ", albumName $ trackAlbum track,
+						" (spotify:track:", trackId track,
+						" by ", formatList "no-one" $ fmap (("spotify:artist:" <>) . artistId) $ trackArtists track,
+						" from spotify:album:", albumId $ trackAlbum track,
+						")"
+					]
 			)
 	]
 
