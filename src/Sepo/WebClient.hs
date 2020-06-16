@@ -46,12 +46,12 @@ start = do
 	ctxRefreshToken <- fmap (head . T.lines) $ T.readFile $ ctxPath <> "/refresh-token"
 	pure $ Ctx {..}
 
-run :: Ctx -> (Client -> ClientM a) -> IO (Either ServantError a)
+run :: Ctx -> (Client -> ClientM a) -> IO (Either ClientError a)
 run ctx m = do
 	token <- readIORef $ ctxTokenRef ctx
 	res <- runClientM (m $ makeClient token) (clientEnv $ ctxMan ctx)
 	case res of
-		Left (FailureResponse res) | responseStatusCode res == status401 -> do
+		Left (FailureResponse req res) | responseStatusCode res == status401 -> do
 			putStrLn $ "refreshing access token because a response failed with status 401: " <> show res
 			refreshAccessToken ctx >>= \case
 				Left err -> pure $ Left err
@@ -63,7 +63,7 @@ run_ ctx m = run ctx m >>= \case
 	Left err -> fail $ show err
 	Right v -> pure v
 
-refreshAccessToken :: Ctx -> IO (Either ServantError ())
+refreshAccessToken :: Ctx -> IO (Either ClientError ())
 refreshAccessToken ctx = do
 	res <- runClientM
 		(client (Proxy :: Proxy AuthAPI)
