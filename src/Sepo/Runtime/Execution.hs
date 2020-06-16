@@ -122,16 +122,18 @@ executeFieldAssignment ctx (PlaylistId pl_id) cmd = do
 		Nothing -> fmap httpPlaylist $ HTTP.run_ (httpCtx ctx) $ \client -> HTTP.getPlaylist client pl_id
 	tracks <- force $ tracks val
 	let chunks = chunksOf 100 $ tracksList tracks
-	HTTP.run_ (httpCtx ctx) $ \client -> HTTP.replaceTracks client pl_id $ HTTP.ReplaceTracks $
+	snapshotId <- fmap HTTP.snapshotRespId $
+		HTTP.run_ (httpCtx ctx) $ \client -> HTTP.replaceTracks client pl_id $ HTTP.ReplaceTracks $
 		fmap (("spotify:track:" <>) . trackId) $ fromMaybe [] $ listToMaybe chunks
-	for_ (drop 1 chunks) $ \chunk -> do
+	let addTracks chunk = fmap HTTP.snapshotRespId $
 		HTTP.run_ (httpCtx ctx) $ \client -> HTTP.addTracks client pl_id $ HTTP.AddTracks
 			(fmap (("spotify:track:" <>) . trackId) chunk) Nothing
+	snapshotId <- foldl ((. addTracks) . (*>)) (pure snapshotId) (drop 1 chunks)
 	T.appendFile (aliasesPath ctx) $ "spotify:playlist:" <> pl_id <> " = " <> reify PPrefix cmd <> ";\n"
 	modifyIORef (aliases ctx) $ M.insert (Left pl_id) cmd
 	pure $ Value {
 		tracks = pure tracks,
-		existing = Just $ ExPlaylist playlist
+		existing = Just $ ExPlaylist $ playlist { playlistSnapshotId = snapshotId }
 	}
 executeFieldAssignment ctx (PlaylistName name) cmd = do
 	pl_id <- findPlaylist ctx name >>= \case

@@ -17,8 +17,8 @@ msToL ms = M.assocs ms >>= uncurry (flip replicate)
 
 data Playlist = Playlist {
 	playlistId :: T.Text,
-	playlistName :: T.Text
-	-- playlistSnapshotId :: T.Text -- TODO
+	playlistName :: T.Text,
+	playlistSnapshotId :: T.Text
 } deriving (Eq, Ord, Show)
 
 data Artist = Artist {
@@ -85,13 +85,15 @@ tracksSet (Unordered tracks) = tracks
 httpPlaylist :: HTTP.Playlist -> Playlist
 httpPlaylist playlist = Playlist {
 		playlistId = HTTP.playlistId playlist,
-		playlistName = HTTP.playlistName playlist
+		playlistName = HTTP.playlistName playlist,
+		playlistSnapshotId = HTTP.playlistSnapshotId playlist
 	}
 
 httpPlaylistS :: HTTP.PlaylistS -> Playlist
 httpPlaylistS playlist = Playlist {
 		playlistId = HTTP.playlistSId playlist,
-		playlistName = HTTP.playlistSName playlist
+		playlistName = HTTP.playlistSName playlist,
+		playlistSnapshotId = HTTP.playlistSSnapshotId playlist
 	}
 
 httpArtistS :: HTTP.ArtistS -> Artist
