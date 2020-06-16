@@ -18,6 +18,7 @@ msToL ms = M.assocs ms >>= uncurry (flip replicate)
 data Playlist = Playlist {
 	playlistId :: T.Text,
 	playlistName :: T.Text
+	-- playlistSnapshotId :: T.Text -- TODO
 } deriving (Eq, Ord, Show)
 
 data Artist = Artist {

@@ -1,9 +1,10 @@
 module Sepo.WebClient where
 
+import Control.Monad.IO.Class
 import Control.Arrow
 import Control.Monad
 import Data.Aeson
-import Data.IORef
+import UnliftIO.IORef
 import Data.Maybe
 import Data.Proxy
 import Data.Time.Clock (UTCTime)
@@ -13,7 +14,7 @@ import Network.HTTP.Client.TLS (newTlsManager)
 import Network.HTTP.Types.Status (status401)
 import Servant.API
 import Servant.Client hiding (Client)
-import System.Environment (getEnv)
+import UnliftIO.Environment (getEnv)
 import Web.FormUrlEncoded (ToForm(..))
 import qualified Data.ByteString.Base64 as B64
 import qualified Data.Map as M
@@ -34,38 +35,38 @@ data Ctx = Ctx {
 	ctxRefreshToken :: T.Text
 }
 
-start :: IO Ctx
+start :: MonadIO m => m Ctx
 start = do
 	ctxMan <- newTlsManager
 	home <- getEnv "HOME"
 	let ctxPath = home <> "/.config/sepo"
-	token <- T.readFile $ ctxPath <> "/token"
+	token <- liftIO $ T.readFile $ ctxPath <> "/token"
 	ctxTokenRef <- newIORef token
-	ctxClientId <- fmap (head . T.lines) $ T.readFile $ ctxPath <> "/client-id"
-	ctxClientSecret <- fmap (head . T.lines) $ T.readFile $ ctxPath <> "/client-secret"
-	ctxRefreshToken <- fmap (head . T.lines) $ T.readFile $ ctxPath <> "/refresh-token"
+	ctxClientId <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/client-id"
+	ctxClientSecret <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/client-secret"
+	ctxRefreshToken <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/refresh-token"
 	pure $ Ctx {..}
 
-run :: Ctx -> (Client -> ClientM a) -> IO (Either ClientError a)
+run :: MonadIO m => Ctx -> (Client -> ClientM a) -> m (Either ClientError a)
 run ctx m = do
 	token <- readIORef $ ctxTokenRef ctx
-	res <- runClientM (m $ makeClient token) (clientEnv $ ctxMan ctx)
+	res <- liftIO $ runClientM (m $ makeClient token) (clientEnv $ ctxMan ctx)
 	case res of
 		Left (FailureResponse req res) | responseStatusCode res == status401 -> do
-			putStrLn $ "refreshing access token because a response failed with status 401: " <> show res
+			liftIO $ putStrLn $ "refreshing access token because a response failed with status 401: " <> show res
 			refreshAccessToken ctx >>= \case
 				Left err -> pure $ Left err
 				Right () -> run ctx m
 		res -> pure res
 
-run_ :: Ctx -> (Client -> ClientM a) -> IO a
+run_ :: (MonadIO m, MonadFail m) => Ctx -> (Client -> ClientM a) -> m a
 run_ ctx m = run ctx m >>= \case
 	Left err -> fail $ show err
 	Right v -> pure v
 
-refreshAccessToken :: Ctx -> IO (Either ClientError ())
+refreshAccessToken :: MonadIO m => Ctx -> m (Either ClientError ())
 refreshAccessToken ctx = do
-	res <- runClientM
+	res <- liftIO $ runClientM
 		(client (Proxy :: Proxy AuthAPI)
 			(("Basic " <>) $ T.decodeUtf8 $ B64.encode $ T.encodeUtf8 $ ctxClientId ctx <> ":" <> ctxClientSecret ctx)
 			(RefreshToken $ ctxRefreshToken ctx))
@@ -73,7 +74,7 @@ refreshAccessToken ctx = do
 	case res of
 		Left err -> pure $ Left err
 		Right (RefreshedToken {..}) -> do
-			T.writeFile (ctxPath ctx <> "/token") refreshedTokenAccessToken
+			liftIO $ T.writeFile (ctxPath ctx <> "/token") refreshedTokenAccessToken
 			writeIORef (ctxTokenRef ctx) refreshedTokenAccessToken
 			pure $ Right ()
 
@@ -117,6 +118,7 @@ type SpotifyAPI = Header' '[Required, Strict] "Authorization" T.Text :>
 	:<|> "albums" :> Capture "album_id" T.Text :> "tracks" :> PagedPath TrackS
 
 	:<|> "tracks" :> Capture "track_id" T.Text :> Get '[JSON] Track
+	:<|> "tracks" :> QueryParam' '[Required, Strict] "ids" TrackIds :> Get '[JSON] Tracks
 
 	:<|> "users" :> Capture "user_id" T.Text :> "playlists" :> ReqBody '[JSON] CreatePlaylist :> Post '[JSON] Playlist
 	:<|> "playlists" :> Capture "playlist_id" T.Text :> ReqBody '[JSON] ChangePlaylistDetails :> Put '[JSON] ()
@@ -145,6 +147,7 @@ data Client = Client {
 	getAlbumTracks :: T.Text -> PagedFn TrackS,
 
 	getTrack :: T.Text -> ClientM Track,
+	getTracks :: TrackIds -> ClientM Tracks,
 
 	createPlaylist :: T.Text -> CreatePlaylist -> ClientM Playlist,
 	changePlaylistDetails :: T.Text -> ChangePlaylistDetails -> ClientM (),
@@ -163,7 +166,7 @@ makeClient token = Client {..}
 		getPlaylist :<|> getPlaylistTracks :<|>
 		getArtist :<|> getArtistAlbums :<|>
 		getAlbum :<|> getAlbums :<|> getAlbumTracks :<|>
-		getTrack :<|>
+		getTrack :<|> getTracks :<|>
 		createPlaylist :<|> changePlaylistDetails :<|>
 		addTracks :<|> removeTracks :<|> reorderTracks :<|> replaceTracks :<|>
 		getCurrentlyPlaying :<|> play = client spotifyAPI $ "Bearer " <> token
@@ -284,6 +287,14 @@ instance FromJSON PlaylistTrack where
 		-- <*> o .: "added_by"
 		<*> o .: "is_local"
 		<*> o .: "track"
+
+newtype TrackIds = TrackIds { unTrackIds :: [T.Text] } deriving (Show)
+instance ToHttpApiData TrackIds where
+	toQueryParam (TrackIds ids) = T.intercalate "," ids
+
+newtype Tracks = Tracks { unTracks :: [Track] } deriving (Show)
+instance FromJSON Tracks where
+	parseJSON = withObject "Tracks" $ \o -> Tracks <$> o.: "tracks"
 
 data Track = Track {
 	trackAlbum :: AlbumS,

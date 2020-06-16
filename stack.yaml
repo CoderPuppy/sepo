@@ -40,6 +40,12 @@ packages:
 # extra-deps: []
 extra-deps:
   - text-trie-0.2.5.0@sha256:8064c70e67dd3db1a04f3fc002b130d167fbc4da4101919fbb0da4484a917ca5,4377
+  - fraxl-0.3.0.0@sha256:65cb43791d827fb8055828d41b6419fbed014ec856593d46cacb1db80f4338c9,1884
+  - dependent-map-0.4.0.0
+  - fastsum-0.1.1.1@sha256:984ce99c8c153f31bffe03af6cc0599818878d62e9dae6ecb26b6623c92d6cec,2325
+  - type-aligned-0.9.6@sha256:2517994f5ce77cb8f3c30b33d403a90d36665d3f7ac668241f37a9f11b20db16,1075
+  - constraints-extras-0.3.0.2@sha256:bf6884be65958e9188ae3c9e5547abfd6d201df021bff8a4704c2c4fe1e1ae5b,1784
+  - dependent-sum-0.7.1.0@sha256:5599aa89637db434431b1dd3fa7c34bc3d565ee44f0519bfbc877be1927c2531,2068
 
 # Override default flag values for local packages and extra-deps
 # flags: {}
