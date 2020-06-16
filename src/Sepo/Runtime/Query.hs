@@ -1,6 +1,9 @@
 {-# LANGUAGE TemplateHaskell #-}
 
-module Sepo.Runtime.Query where
+module Sepo.Runtime.Query (
+	Ctx(..), start, run, Source(..),
+	dataFetch, FreerT
+) where
 
 import Control.Applicative
 import Control.Arrow
@@ -40,6 +43,7 @@ data Source a where
 	STrack :: T.Text -> Source Track
 	SAlbum :: T.Text -> Source Album
 	SAlbumTracks :: T.Text -> Source [Track]
+	SArtist :: T.Text -> Source Artist
 	SArtistAlbums :: T.Text -> Source [Album]
 instance GEq Source where
 	SCurrentUser `geq` SCurrentUser = Just Refl
@@ -50,6 +54,7 @@ instance GEq Source where
 	STrack a `geq` STrack b = bool (Just Refl) Nothing $ a == b
 	SAlbum a `geq` SAlbum b = bool (Just Refl) Nothing $ a == b
 	SAlbumTracks a `geq` SAlbumTracks b = bool (Just Refl) Nothing $ a == b
+	SArtist a `geq` SArtist b = bool (Just Refl) Nothing $ a == b
 	SArtistAlbums a `geq` SArtistAlbums b = bool (Just Refl) Nothing $ a == b
 	_ `geq` _ = Nothing
 instance GCompare Source where
@@ -103,6 +108,18 @@ instance GCompare Source where
 		EQ -> GEQ
 		GT -> GGT
 	SAlbumTracks _ `gcompare` _ = GLT
+	SArtist _ `gcompare` SCurrentUser = GGT
+	SArtist _ `gcompare` SPlaylist _ = GGT
+	SArtist _ `gcompare` SPlaylistTracks _ = GGT
+	SArtist _ `gcompare` SCurrentlyPlaying = GGT
+	SArtist _ `gcompare` STrack _ = GGT
+	SArtist _ `gcompare` SAlbum _ = GGT
+	SArtist _ `gcompare` SAlbumTracks _ = GGT
+	SArtist a `gcompare` SArtist b = case compare a b of
+		LT -> GLT
+		EQ -> GEQ
+		GT -> GGT
+	SArtist _ `gcompare` _ = GLT
 	SArtistAlbums _ `gcompare` SCurrentUser = GGT
 	SArtistAlbums _ `gcompare` SPlaylist _ = GGT
 	SArtistAlbums _ `gcompare` SPlaylistTracks _ = GGT
@@ -110,6 +127,7 @@ instance GCompare Source where
 	SArtistAlbums _ `gcompare` STrack _ = GGT
 	SArtistAlbums _ `gcompare` SAlbum _ = GGT
 	SArtistAlbums _ `gcompare` SAlbumTracks _ = GGT
+	SArtistAlbums _ `gcompare` SArtist _ = GGT
 	SArtistAlbums a `gcompare` SArtistAlbums b = case compare a b of
 		LT -> GLT
 		EQ -> GEQ
@@ -139,6 +157,14 @@ data Ctx = Ctx {
 	ctxAlbumTracksCache :: IORef (M.Map T.Text (MVar (HTTP.Paging HTTP.TrackS))),
 	ctxHTTP :: HTTP.Ctx
 }
+
+start :: MonadIO m => m Ctx
+start = do
+	ctxCache <- newIORef DM.empty
+	ctxPlaylistTracksCache <- newIORef M.empty
+	ctxAlbumTracksCache <- newIORef M.empty
+	ctxHTTP <- HTTP.start
+	pure $ Ctx {..}
 
 fetch :: (MonadUnliftIO m, MonadFail m) => Ctx -> Fetch Source m a
 fetch ctx ss = do
@@ -209,6 +235,8 @@ exec ctx (SAlbumTracks aid) = do
 		Nothing -> do
 			HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getAlbumTracks client aid
 	pure $ (fmap . httpTrackS) <$> readMVar album <*> tracks
+exec ctx (SArtist aid) = pure $ fmap httpArtistS $
+	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getArtist client aid
 exec ctx (SArtistAlbums aid) = pure $ fmap (fmap httpAlbumS) $
 	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getArtistAlbums client aid
 -- SPlaylist, STrack and SAlbum should be handled elsewhere
@@ -224,3 +252,6 @@ dispatch ctx s = fmap (DM.lookup s) (readIORef $ ctxCache ctx) >>= \case
 			res <- act
 			putMVar var res
 			pure res
+
+run :: (MonadUnliftIO m, MonadFail m) => Ctx -> FreerT Source m a -> m a
+run ctx = runFraxl $ fetch ctx

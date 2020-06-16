@@ -30,9 +30,10 @@ import qualified Data.Text.IO as T
 import qualified Sepo.DBusClient as DBus
 import qualified Sepo.Runtime.Filter as Filter
 import qualified Sepo.WebClient as HTTP
+import qualified Sepo.Runtime.Query as Query
 
 data Context = Context {
-	httpCtx :: HTTP.Ctx,
+	queryCtx :: Query.Ctx,
 	dbusClient :: DBus.Client,
 	userId :: T.Text,
 	userPlaylists :: IORef (Maybe [Playlist]),
@@ -43,7 +44,7 @@ data Context = Context {
 
 start :: IO Context
 start = do
-	httpCtx <- HTTP.start
+	queryCtx <- Query.start
 	dbusClient <- DBus.connectSession
 	home <- getEnv "HOME"
 	let cachePath = home <> "/.cache/sepo"
@@ -53,8 +54,7 @@ start = do
 		in doesFileExist path >>= \case
 			True -> T.readFile path
 			False -> do
-				user <- HTTP.run_ httpCtx HTTP.getUser
-				let userId = HTTP.userId user
+				userId <- Query.run queryCtx $ Query.dataFetch $ Query.SCurrentUser
 				T.writeFile path userId
 				pure userId
 	userPlaylists <- newIORef Nothing
@@ -83,22 +83,20 @@ findPlaylist ctx name = do
 	pls <- readIORef (userPlaylists ctx) >>= \case
 		Just pls -> pure pls
 		Nothing -> do
-			pls <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.getAllPaged $ HTTP.getPlaylists client
-			let pls' = fmap httpPlaylistS pls
-			modifyIORef (userPlaylists ctx) $ Just . fromMaybe pls'
-			pure pls'
+			pls <- Query.run (queryCtx ctx) $ Query.dataFetch $ Query.SCurrentUserPlaylists
+			modifyIORef (userPlaylists ctx) $ Just . fromMaybe pls
+			pure pls
 	pure $ find ((== name) . playlistName) pls
 
 executeField :: Context -> Field -> IO Value
 executeField ctx (PlaylistId pl_id) = do
-	playlist <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.getPlaylist client pl_id
+	playlist <- Query.run (queryCtx ctx) $ Query.dataFetch $ Query.SPlaylist pl_id
 	pure $ Value {
-		tracks = Lazy $ do
-			tracks <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.getAllPagedContinue (HTTP.getPlaylistTracks client pl_id) (HTTP.playlistTracks playlist)
+		tracks = Lazy $
 			-- TODO: check for a Sepo tag for unordered
-			pure $ Ordered $ fmap (httpTrack . HTTP.playlistTrack) tracks
+			fmap (Ordered . fmap fst) $ Query.run (queryCtx ctx) $ Query.dataFetch $ Query.SPlaylistTracks pl_id
 			,
-		existing = Just $ ExPlaylist $ httpPlaylist playlist
+		existing = Just $ ExPlaylist playlist
 	}
 executeField ctx (PlaylistName name) = do
 	pl <- findPlaylist ctx name >>= maybe (fail $ "unknown playlist: " <> T.unpack name) pure
@@ -107,26 +105,26 @@ executeField ctx (AliasName name) = do
 	alias <- readIORef (aliases ctx) >>= maybe (fail $ "unknown alias: " <> T.unpack name) pure . M.lookup (Right name)
 	executeCmd ctx alias
 executeField ctx Playing = do
-	currentlyPlaying <- HTTP.run_ (httpCtx ctx) HTTP.getCurrentlyPlaying
-	context <- maybe (fail "incognito?") pure $ HTTP.currentlyPlayingContext currentlyPlaying
-	case HTTP.contextType context of
-		HTTP.CTPlaylist -> executeField ctx $ PlaylistId $ (!! 2) $ T.splitOn ":" $ HTTP.contextURI context
-		HTTP.CTAlbum -> executeCmd ctx $ AlbumId $ (!! 2) $ T.splitOn ":" $ HTTP.contextURI context
-		HTTP.CTArtist -> executeCmd ctx $ ArtistId $ (!! 2) $ T.splitOn ":" $ HTTP.contextURI context
+	(context, _) <- Query.run (queryCtx ctx) $ Query.dataFetch $ Query.SCurrentlyPlaying
+	(contextType, contextURI) <- maybe (fail "incognito?") pure context
+	case contextType of
+		HTTP.CTPlaylist -> executeField ctx $ PlaylistId $ (!! 2) $ T.splitOn ":" contextURI
+		HTTP.CTAlbum -> executeCmd ctx $ AlbumId $ (!! 2) $ T.splitOn ":" contextURI
+		HTTP.CTArtist -> executeCmd ctx $ ArtistId $ (!! 2) $ T.splitOn ":" contextURI
 
 executeFieldAssignment :: Context -> Field -> Cmd -> IO Value
 executeFieldAssignment ctx (PlaylistId pl_id) cmd = do
 	val <- executeCmd ctx cmd
 	playlist <- fmap (>>= find ((== pl_id) . playlistId)) (readIORef $ userPlaylists ctx) >>= \case
 		Just playlist -> pure playlist
-		Nothing -> fmap httpPlaylist $ HTTP.run_ (httpCtx ctx) $ \client -> HTTP.getPlaylist client pl_id
+		Nothing -> Query.run (queryCtx ctx) $ Query.dataFetch $ Query.SPlaylist pl_id
 	tracks <- force $ tracks val
 	let chunks = chunksOf 100 $ tracksList tracks
 	snapshotId <- fmap HTTP.snapshotRespId $
-		HTTP.run_ (httpCtx ctx) $ \client -> HTTP.replaceTracks client pl_id $ HTTP.ReplaceTracks $
+		HTTP.run_ (Query.ctxHTTP $ queryCtx ctx) $ \client -> HTTP.replaceTracks client pl_id $ HTTP.ReplaceTracks $
 		fmap (("spotify:track:" <>) . trackId) $ fromMaybe [] $ listToMaybe chunks
 	let addTracks chunk = fmap HTTP.snapshotRespId $
-		HTTP.run_ (httpCtx ctx) $ \client -> HTTP.addTracks client pl_id $ HTTP.AddTracks
+		HTTP.run_ (Query.ctxHTTP $ queryCtx ctx) $ \client -> HTTP.addTracks client pl_id $ HTTP.AddTracks
 			(fmap (("spotify:track:" <>) . trackId) chunk) Nothing
 	snapshotId <- foldl ((. addTracks) . (*>)) (pure snapshotId) (drop 1 chunks)
 	T.appendFile (aliasesPath ctx) $ "spotify:playlist:" <> pl_id <> " = " <> reify PPrefix cmd <> ";\n"
@@ -139,7 +137,7 @@ executeFieldAssignment ctx (PlaylistName name) cmd = do
 	pl_id <- findPlaylist ctx name >>= \case
 		Just pl -> pure $ playlistId pl
 		Nothing -> do
-			pl <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.createPlaylist client (userId ctx) $ HTTP.CreatePlaylist
+			pl <- HTTP.run_ (Query.ctxHTTP $ queryCtx ctx) $ \client -> HTTP.createPlaylist client (userId ctx) $ HTTP.CreatePlaylist
 				name Nothing Nothing (Just "created by Sepo")
 			pure $ HTTP.playlistId pl
 	executeFieldAssignment ctx (PlaylistId pl_id) cmd
@@ -183,10 +181,9 @@ executeCmd ctx (TrackId tr_id) = pure $ Value {
 		tracks = Lazy $ do
 			let path = cachePath ctx <> "/tracks/" <> T.unpack tr_id
 			let get = do
-				track <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.getTrack client tr_id
-				let track' = httpTrack track
-				encodeFile path track'
-				pure $ Ordered [track']
+				track <- Query.run (queryCtx ctx) $ Query.dataFetch $ Query.STrack tr_id
+				encodeFile path track
+				pure $ Ordered [track]
 			doesFileExist path >>= \case
 				True -> decodeFileStrict path >>= \case
 					Just track -> pure $ Ordered [track]
@@ -198,21 +195,17 @@ executeCmd ctx (TrackId tr_id) = pure $ Value {
 executeCmd ctx (AlbumId al_id) = do
 	let path = cachePath ctx <> "/albums/" <> T.unpack al_id
 	let get = do
-		album <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.getAlbum client al_id
-		let album' = httpAlbum album
-		encodeFile path album'
+		album <- Query.run (queryCtx ctx) $ Query.dataFetch $ Query.SAlbum al_id
+		encodeFile path album
 		pure (
-				album',
-				HTTP.run_ (httpCtx ctx) $ \client -> HTTP.getAllPagedContinue
-					(HTTP.getAlbumTracks client al_id)
-					(HTTP.albumTracks album)
+				album,
+				Query.run (queryCtx ctx) $ Query.dataFetch $ Query.SAlbumTracks al_id
 			)
 	(album, getTracks) <- doesFileExist path >>= \case
 		True -> decodeFileStrict path >>= \case
 			Just album -> pure (
 					album,
-					HTTP.run_ (httpCtx ctx) $ \client ->
-						HTTP.getAllPaged $ HTTP.getAlbumTracks client $ albumId album
+					Query.run (queryCtx ctx) $ Query.dataFetch $ Query.SAlbumTracks al_id
 				)
 			Nothing -> get
 		False -> get
@@ -220,7 +213,7 @@ executeCmd ctx (AlbumId al_id) = do
 		tracks = Lazy $ do
 			let path = cachePath ctx <> "/albums/" <> T.unpack al_id <> "-tracks"
 			let get = do
-				tracks <- fmap (fmap (httpTrackS album)) getTracks
+				tracks <- getTracks
 				encodeFile path tracks
 				pure $ Ordered tracks
 			doesFileExist path >>= \case
@@ -232,36 +225,32 @@ executeCmd ctx (AlbumId al_id) = do
 		existing = Just $ ExAlbum album
 	}
 executeCmd ctx (ArtistId ar_id) = do
-	artist <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.getArtist client ar_id
+	artist <- Query.run (queryCtx ctx) $ Query.dataFetch $ Query.SArtist ar_id
 	pure $ Value {
 		tracks = Lazy $ do
-			albumSs <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.getAllPaged $ HTTP.getArtistAlbums client ar_id
-			(albumSs, cached) <- fmap partitionEithers $ for albumSs $ \albumS -> do
-				let path = cachePath ctx <> "/albums/" <> T.unpack (HTTP.albumSId albumS) <> "-tracks"
+			albums <- Query.run (queryCtx ctx) $ Query.dataFetch $ Query.SArtistAlbums ar_id
+			(albums, cached) <- fmap partitionEithers $ for albums $ \album -> do
+				let path = cachePath ctx <> "/albums/" <> T.unpack (albumId album) <> "-tracks"
 				doesFileExist path >>= \case
 					True -> decodeFileStrict path >>= \case
 						Just tracks -> pure $ Right tracks
-						Nothing -> pure $ Left albumS
-					False -> pure $ Left albumS
-			let albumSBatches = chunksOf 20 albumSs
-			albums <- fmap join $ for albumSBatches $ \albumSs -> do
-				fmap HTTP.unAlbums $ HTTP.run_ (httpCtx ctx) $ \client -> HTTP.getAlbums client $ HTTP.AlbumIds $ fmap HTTP.albumSId albumSs
+						Nothing -> pure $ Left album
+					False -> pure $ Left album
 			trackss <- for albums $ \album -> do
-				tracks <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.getAllPagedContinue
-					(HTTP.getAlbumTracks client $ HTTP.albumId album)
-					(HTTP.albumTracks album)
-				let album' = httpAlbum album
-				let tracks' = fmap (httpTrackS album') tracks
-				encodeFile (cachePath ctx <> "/albums/" <> T.unpack (HTTP.albumId album)) album'
-				encodeFile (cachePath ctx <> "/albums/" <> T.unpack (HTTP.albumId album) <> "-tracks") tracks'
-				pure tracks'
+				tracks <- Query.run (queryCtx ctx) $ Query.dataFetch $ Query.SAlbumTracks $ albumId album
+				encodeFile (cachePath ctx <> "/albums/" <> T.unpack (albumId album)) album
+				encodeFile (cachePath ctx <> "/albums/" <> T.unpack (albumId album) <> "-tracks") tracks
+				pure tracks
 			pure $ Unordered $ M.fromList $ fmap (, 1) $ filter (any ((== ar_id) . artistId) . trackArtists) $ join $ cached ++ trackss
 			,
-		existing = Just $ ExArtist $ httpArtistS artist
+		existing = Just $ ExArtist artist
 	}
 executeCmd ctx PlayingSong = do
-	currentlyPlaying <- HTTP.run_ (httpCtx ctx) HTTP.getCurrentlyPlaying
-	executeCmd ctx $ TrackId $ HTTP.trackId $ HTTP.currentlyPlayingItem currentlyPlaying
+	(_, track) <- Query.run (queryCtx ctx) $ Query.dataFetch $ Query.SCurrentlyPlaying
+	pure $ Value {
+			tracks = Strict $ Ordered [track],
+			existing = Nothing
+		}
 executeCmd ctx Empty = pure $ Value (pure $ Unordered M.empty) Nothing
 executeCmd ctx (Seq a b) = executeCmd ctx a *> executeCmd ctx b
 executeCmd ctx (Concat a b) = do
