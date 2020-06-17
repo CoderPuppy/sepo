@@ -1,6 +1,6 @@
-{-# LANGUAGE RankNTypes, FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts #-}
 
-module Sepo.Runtime.Execution where
+module Sepo.Expr.Runtime where
 
 import Control.Monad.IO.Class
 import Control.Monad (join)
@@ -16,8 +16,8 @@ import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Monoid (Any(..))
 import Data.Traversable (for)
 import Prelude hiding (subtract)
-import Sepo.AST
-import Sepo.Parser
+import Sepo.Expr.AST
+import Sepo.Expr.Parser
 import Sepo.Runtime.Values
 import UnliftIO.Directory (createDirectoryIfMissing, doesFileExist)
 import UnliftIO.Environment (getEnv)
@@ -39,24 +39,14 @@ data Context = Context {
 	userId :: T.Text,
 	userPlaylists :: IORef (Maybe [Playlist]),
 	aliasesPath :: FilePath,
-	aliases :: IORef (M.Map (Either T.Text T.Text) Cmd),
-	cachePath :: FilePath
+	aliases :: IORef (M.Map (Either T.Text T.Text) Cmd)
 }
 
 start :: (Query.MonadFraxl Query.Source m, MonadIO m) => HTTP.Ctx -> m Context
 start httpCtx = do
 	dbusClient <- liftIO DBus.connectSession
 	home <- getEnv "HOME"
-	let cachePath = home <> "/.cache/sepo"
-	createDirectoryIfMissing True $ cachePath <> "/albums"
-	createDirectoryIfMissing True $ cachePath <> "/tracks"
-	userId <- let path = cachePath <> "/user-id"
-		in doesFileExist path >>= \case
-			True -> liftIO $ T.readFile path
-			False -> do
-				userId <- Query.dataFetch $ Query.SCurrentUser
-				liftIO $ T.writeFile path userId
-				pure userId
+	userId <- Query.dataFetch $ Query.SCurrentUser
 	userPlaylists <- newIORef Nothing
 	let aliasesPath = home <> "/.config/sepo/aliases"
 	aliases <- do
@@ -178,50 +168,13 @@ executeCmd ctx (Field (FieldAccess field (cmd:cmds))) = do
 	executeFieldAssignment ctx field cmd
 	executeCmd ctx $ Field $ FieldAccess field cmds
 executeCmd ctx (TrackId tr_id) = pure $ Value {
-		tracks = Lazy $ do
-			let path = cachePath ctx <> "/tracks/" <> T.unpack tr_id
-			let get = do
-				track <- Query.dataFetch $ Query.STrack tr_id
-				liftIO $ encodeFile path track
-				pure $ Ordered [track]
-			doesFileExist path >>= \case
-				True -> liftIO (decodeFileStrict path) >>= \case
-					Just track -> pure $ Ordered [track]
-					Nothing -> get
-				False -> get
-			,
+		tracks = Lazy $ fmap (Ordered . pure) $ Query.dataFetch $ Query.STrack tr_id,
 		existing = Nothing
 	}
 executeCmd ctx (AlbumId al_id) = do
-	let path = cachePath ctx <> "/albums/" <> T.unpack al_id
-	let get = do
-		album <- Query.dataFetch $ Query.SAlbum al_id
-		liftIO $ encodeFile path album
-		pure (
-				album,
-				Query.dataFetch $ Query.SAlbumTracks al_id
-			)
-	(album, getTracks) <- doesFileExist path >>= \case
-		True -> liftIO (decodeFileStrict path) >>= \case
-			Just album -> pure (
-					album,
-					Query.dataFetch $ Query.SAlbumTracks al_id
-				)
-			Nothing -> get
-		False -> get
+	album <- Query.dataFetch $ Query.SAlbum al_id
 	pure $ Value {
-		tracks = Lazy $ do
-			let path = cachePath ctx <> "/albums/" <> T.unpack al_id <> "-tracks"
-			let get = do
-				tracks <- getTracks
-				liftIO $ encodeFile path tracks
-				pure $ Ordered tracks
-			doesFileExist path >>= \case
-				True -> liftIO (decodeFileStrict path) >>= \case
-					Just tracks -> pure $ Ordered tracks
-					Nothing -> get
-				False -> get
-			,
+		tracks = Lazy $ fmap Ordered $ Query.dataFetch $ Query.SAlbumTracks al_id,
 		existing = Just $ ExAlbum album
 	}
 executeCmd ctx (ArtistId ar_id) = do
@@ -229,19 +182,8 @@ executeCmd ctx (ArtistId ar_id) = do
 	pure $ Value {
 		tracks = Lazy $ do
 			albums <- Query.dataFetch $ Query.SArtistAlbums ar_id
-			(albums, cached) <- fmap partitionEithers $ for albums $ \album -> do
-				let path = cachePath ctx <> "/albums/" <> T.unpack (albumId album) <> "-tracks"
-				doesFileExist path >>= \case
-					True -> liftIO (decodeFileStrict path) >>= \case
-						Just tracks -> pure $ Right tracks
-						Nothing -> pure $ Left album
-					False -> pure $ Left album
-			trackss <- for albums $ \album -> do
-				tracks <- Query.dataFetch $ Query.SAlbumTracks $ albumId album
-				liftIO $ encodeFile (cachePath ctx <> "/albums/" <> T.unpack (albumId album)) album
-				liftIO $ encodeFile (cachePath ctx <> "/albums/" <> T.unpack (albumId album) <> "-tracks") tracks
-				pure tracks
-			pure $ Unordered $ M.fromList $ fmap (, 1) $ filter (any ((== ar_id) . artistId) . trackArtists) $ join $ cached ++ trackss
+			trackss <- for albums $ Query.dataFetch . Query.SAlbumTracks . albumId
+			pure $ Unordered $ M.fromList $ fmap (, 1) $ filter (any ((== ar_id) . artistId) . trackArtists) $ join $ trackss
 			,
 		existing = Just $ ExArtist artist
 	}

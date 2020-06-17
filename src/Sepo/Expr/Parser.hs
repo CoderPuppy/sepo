@@ -1,4 +1,4 @@
-module Sepo.Parser where
+module Sepo.Expr.Parser where
 
 import Control.Applicative
 import Control.Monad
@@ -6,7 +6,7 @@ import Data.Char
 import Data.Foldable
 import Data.Maybe
 import Data.Void
-import Sepo.AST
+import Sepo.Expr.AST
 import Text.Megaparsec hiding (many, some)
 import Text.Megaparsec.Char
 import qualified Data.Text as T

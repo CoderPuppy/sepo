@@ -1,4 +1,4 @@
-module Sepo.AST where
+module Sepo.Expr.AST where
 
 import Data.Text
 

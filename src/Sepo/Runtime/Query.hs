@@ -1,31 +1,37 @@
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TemplateHaskell, FlexibleContexts, BlockArguments #-}
 
 module Sepo.Runtime.Query (
 	Ctx(..), start, run, Source(..),
 	MonadFraxl(dataFetch), FreerT
 ) where
 
-import Control.Monad.Trans.Class
+import Conduit ((.|))
+import qualified Conduit as Conduit
+import qualified Data.Conduit.List as Conduit (chunksOf)
+import qualified Data.Conduit.ConcurrentMap as Conduit
+import Data.Functor.Identity
 import Control.Applicative
 import Control.Arrow
 import Control.Lens ((^.), set)
 import Control.Lens.TH (makeLenses)
+import Control.Monad
 import Control.Monad.Fraxl
-import Control.Monad.Trans.Fraxl.Free
 import Control.Monad.IO.Class
 import Control.Monad.IO.Unlift
 import Control.Monad.State.Class (modify)
+import Control.Monad.Trans.Class
+import Control.Monad.Trans.Fraxl.Free
+import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.State.Lazy (execStateT)
 import Data.Bool (bool)
 import Data.Dependent.Map.Lens
 import Data.Foldable
 import Data.Functor.Identity (Identity(runIdentity))
 import Data.List.Split (chunksOf)
-import Data.Maybe (fromMaybe, fromJust)
-import Data.Time.Clock (UTCTime)
+import Data.Maybe (fromMaybe, fromJust, isNothing)
 import Data.Traversable (for)
-import Data.Type.Equality ((:~:)(Refl))
-import UnliftIO.Async (async, wait, forConcurrently_, Conc, conc, runConc)
+import UnliftIO.Async
+import UnliftIO.Directory (createDirectoryIfMissing)
 import UnliftIO.IORef
 import UnliftIO.MVar
 import qualified Data.Dependent.Map as DM
@@ -34,110 +40,12 @@ import qualified Data.Set as S
 import qualified Data.Text as T
 
 import Sepo.Runtime.Values
+import Sepo.Runtime.Cache (CacheSource)
+import qualified Sepo.Runtime.Cache as Cache
 import qualified Sepo.WebClient as HTTP
 
 instance (Applicative f, MonadFail m) => MonadFail (FreeT f m) where
 	fail = lift . fail
-
-data Source a where
-	SCurrentUser :: Source T.Text
-	SCurrentUserPlaylists :: Source [Playlist]
-	SPlaylist :: T.Text -> Source Playlist
-	SPlaylistTracks :: T.Text -> Source [(Track, UTCTime)]
-	SCurrentlyPlaying :: Source (Maybe (HTTP.ContextType, T.Text), Track)
-	STrack :: T.Text -> Source Track
-	SAlbum :: T.Text -> Source Album
-	SAlbumTracks :: T.Text -> Source [Track]
-	SArtist :: T.Text -> Source Artist
-	SArtistAlbums :: T.Text -> Source [Album]
-instance GEq Source where
-	SCurrentUser `geq` SCurrentUser = Just Refl
-	SCurrentUserPlaylists `geq` SCurrentUserPlaylists = Just Refl
-	SPlaylist a `geq` SPlaylist b = bool (Just Refl) Nothing $ a == b
-	SPlaylistTracks a `geq` SPlaylistTracks b = bool (Just Refl) Nothing $ a == b
-	SCurrentlyPlaying `geq` SCurrentlyPlaying = Just Refl
-	STrack a `geq` STrack b = bool (Just Refl) Nothing $ a == b
-	SAlbum a `geq` SAlbum b = bool (Just Refl) Nothing $ a == b
-	SAlbumTracks a `geq` SAlbumTracks b = bool (Just Refl) Nothing $ a == b
-	SArtist a `geq` SArtist b = bool (Just Refl) Nothing $ a == b
-	SArtistAlbums a `geq` SArtistAlbums b = bool (Just Refl) Nothing $ a == b
-	_ `geq` _ = Nothing
-instance GCompare Source where
-	SCurrentUser `gcompare` SCurrentUser = GEQ
-	SCurrentUser `gcompare` _ = GLT
-	SPlaylist _ `gcompare` SCurrentUser = GGT
-	SPlaylist a `gcompare` SPlaylist b = case compare a b of
-		LT -> GLT
-		EQ -> GEQ
-		GT -> GGT
-	SPlaylist _ `gcompare` _ = GLT
-	SPlaylistTracks _ `gcompare` SCurrentUser = GGT
-	SPlaylistTracks _ `gcompare` SPlaylist _ = GGT
-	SPlaylistTracks a `gcompare` SPlaylistTracks b = case compare a b of
-		LT -> GLT
-		EQ -> GEQ
-		GT -> GGT
-	SPlaylistTracks _ `gcompare` _ = GLT
-	SCurrentlyPlaying `gcompare` SCurrentUser = GGT
-	SCurrentlyPlaying `gcompare` SPlaylist _ = GGT
-	SCurrentlyPlaying `gcompare` SPlaylistTracks _ = GGT
-	SCurrentlyPlaying `gcompare` SCurrentlyPlaying = GEQ
-	SCurrentlyPlaying `gcompare` _ = GLT
-	STrack _ `gcompare` SCurrentUser = GGT
-	STrack _ `gcompare` SPlaylist _ = GGT
-	STrack _ `gcompare` SPlaylistTracks _ = GGT
-	STrack _ `gcompare` SCurrentlyPlaying = GGT
-	STrack a `gcompare` STrack b = case compare a b of
-		LT -> GLT
-		EQ -> GEQ
-		GT -> GGT
-	STrack _ `gcompare` _ = GLT
-	SAlbum _ `gcompare` SCurrentUser = GGT
-	SAlbum _ `gcompare` SPlaylist _ = GGT
-	SAlbum _ `gcompare` SPlaylistTracks _ = GGT
-	SAlbum _ `gcompare` SCurrentlyPlaying = GGT
-	SAlbum _ `gcompare` STrack _ = GGT
-	SAlbum a `gcompare` SAlbum b = case compare a b of
-		LT -> GLT
-		EQ -> GEQ
-		GT -> GGT
-	SAlbum _ `gcompare` _ = GLT
-	SAlbumTracks _ `gcompare` SCurrentUser = GGT
-	SAlbumTracks _ `gcompare` SPlaylist _ = GGT
-	SAlbumTracks _ `gcompare` SPlaylistTracks _ = GGT
-	SAlbumTracks _ `gcompare` SCurrentlyPlaying = GGT
-	SAlbumTracks _ `gcompare` STrack _ = GGT
-	SAlbumTracks _ `gcompare` SAlbum _ = GGT
-	SAlbumTracks a `gcompare` SAlbumTracks b = case compare a b of
-		LT -> GLT
-		EQ -> GEQ
-		GT -> GGT
-	SAlbumTracks _ `gcompare` _ = GLT
-	SArtist _ `gcompare` SCurrentUser = GGT
-	SArtist _ `gcompare` SPlaylist _ = GGT
-	SArtist _ `gcompare` SPlaylistTracks _ = GGT
-	SArtist _ `gcompare` SCurrentlyPlaying = GGT
-	SArtist _ `gcompare` STrack _ = GGT
-	SArtist _ `gcompare` SAlbum _ = GGT
-	SArtist _ `gcompare` SAlbumTracks _ = GGT
-	SArtist a `gcompare` SArtist b = case compare a b of
-		LT -> GLT
-		EQ -> GEQ
-		GT -> GGT
-	SArtist _ `gcompare` _ = GLT
-	SArtistAlbums _ `gcompare` SCurrentUser = GGT
-	SArtistAlbums _ `gcompare` SPlaylist _ = GGT
-	SArtistAlbums _ `gcompare` SPlaylistTracks _ = GGT
-	SArtistAlbums _ `gcompare` SCurrentlyPlaying = GGT
-	SArtistAlbums _ `gcompare` STrack _ = GGT
-	SArtistAlbums _ `gcompare` SAlbum _ = GGT
-	SArtistAlbums _ `gcompare` SAlbumTracks _ = GGT
-	SArtistAlbums _ `gcompare` SArtist _ = GGT
-	SArtistAlbums a `gcompare` SArtistAlbums b = case compare a b of
-		LT -> GLT
-		EQ -> GEQ
-		GT -> GGT
-	SArtistAlbums _ `gcompare` _ = GLT
 
 srcsPlaylists :: ASeq Source a -> S.Set T.Text
 srcsPlaylists ANil = S.empty
@@ -155,21 +63,67 @@ srcsAlbums (ACons (SAlbum aid) t) = S.insert aid $ srcsAlbums t
 srcsAlbums (ACons (SAlbumTracks aid) t) = S.insert aid $ srcsAlbums t
 srcsAlbums (ACons _ t) = srcsAlbums t
 
+srcOthers :: Source a -> a -> DM.DMap Source Identity
+srcOthers s v = case (s, v) of
+	(SCurrentUser, _) -> DM.empty
+	(SCurrentUserPlaylists, pls) -> DM.unions $ fmap (\pl -> srcAll (SPlaylist $ playlistId pl) pl) pls
+	(SPlaylist pid, _) -> DM.empty
+	(SPlaylistTracks pid, trs) -> DM.unions $ fmap (\(tr, _) -> srcAll (STrack $ trackId tr) tr) trs
+	(SCurrentlyPlaying, (_, tr)) -> srcAll (STrack $ trackId tr) tr
+	(STrack tid, tr) -> DM.union
+		(srcAll (SAlbum $ albumId $ trackAlbum tr) (trackAlbum tr))
+		(DM.unions $ fmap (\ar -> srcAll (SArtist $ artistId ar) ar) $ trackArtists tr)
+	(SAlbum aid, al) -> DM.unions $ fmap (\ar -> srcAll (SArtist $ artistId ar) ar) $ albumArtists al
+	(SAlbumTracks aid, trs) -> DM.unions $ fmap (\tr -> srcAll (STrack $ trackId tr) tr) trs
+	(SArtist aid, _) -> DM.empty
+	(SArtistAlbums aid, als) -> DM.unions $ fmap (\al -> srcAll (SAlbum $ albumId al) al) als
+
+srcAll :: Source a -> a -> DM.DMap Source Identity
+srcAll s v = DM.insert s (Identity v) $ srcOthers s v
+
 -- TODO: filesystem cache
 data Ctx = Ctx {
 	ctxCache :: IORef (DM.DMap Source MVar),
+	ctxCachePath :: FilePath,
+	-- the tracks caches are for reusing the embedded tracks sections in the general information requests
+	-- if they don't exist or are filled with Nothing a plain request will be made
 	ctxPlaylistTracksCache :: IORef (M.Map T.Text (MVar (HTTP.Paging HTTP.PlaylistTrack))),
-	ctxAlbumTracksCache :: IORef (M.Map T.Text (MVar (HTTP.Paging HTTP.TrackS))),
+	-- the only reason this should be filled with Nothing is if the general information (SAlbum) is not in the in-memory cache
+	-- but is in the filesystem cache, then the batch fetcher will promise to provide it before realizing it doesn't have to make a request
+	ctxAlbumTracksCache :: IORef (M.Map T.Text (MVar (Maybe (HTTP.Paging HTTP.TrackS)))),
+	ctxFSCache :: IORef Cache.Cache,
 	ctxHTTP :: HTTP.Ctx
 }
 
-start :: MonadIO m => m Ctx
-start = do
+start :: MonadIO m => FilePath -> m Ctx
+start ctxCachePath = do
 	ctxCache <- newIORef DM.empty
+	createDirectoryIfMissing True $ ctxCachePath <> "/playlists"
+	createDirectoryIfMissing True $ ctxCachePath <> "/tracks"
+	createDirectoryIfMissing True $ ctxCachePath <> "/albums"
+	createDirectoryIfMissing True $ ctxCachePath <> "/artists"
 	ctxPlaylistTracksCache <- newIORef M.empty
 	ctxAlbumTracksCache <- newIORef M.empty
+	ctxFSCache <- newIORef DM.empty
 	ctxHTTP <- HTTP.start
 	pure $ Ctx {..}
+
+cacheGet :: MonadUnliftIO m => Ctx -> Source a -> m (Maybe a)
+cacheGet ctx = runFraxl (Cache.fetch_ (ctxCachePath ctx, ctxFSCache ctx)) .  dataFetch . Cache.CacheSource
+
+finalize :: forall m a. MonadUnliftIO m => Ctx -> MVar a -> Source a -> a -> Bool -> m ()
+finalize ctx var s res cached = do
+	putMVar var res
+	others <- DM.traverseWithKey (const $ newMVar . runIdentity) (srcAll s res)
+	others' <- atomicModifyIORef (ctxCache ctx) $ \cache -> (DM.union cache others, DM.difference others cache)
+	when (not cached) $ do
+		cache <- readIORef $ ctxCache ctx
+		let
+			put :: forall b. Bool -> Source b -> b -> m ()
+			put = Cache.put (ctxCachePath ctx) (\s -> traverse readMVar $ DM.lookup s cache)
+		runConc $
+			(conc (put True s res) *>) $
+			DM.forWithKey_ others' $ \s' v' -> conc $ put False s' =<< readMVar v'
 
 fetch :: (MonadUnliftIO m, MonadFail m) => Ctx -> Fetch Source m a
 fetch ctx ss = do
@@ -190,28 +144,65 @@ fetch ctx ss = do
 		tracksVars <- for aids $ \aid -> if DM.member (SAlbumTracks aid) cache then pure Nothing else fmap Just newEmptyMVar
 		modifyIORef (ctxCache ctx) $ flip (foldl $ flip $ uncurry $ DM.insert . SAlbum) (zip aids vars)
 		modifyIORef (ctxAlbumTracksCache ctx) $ flip (foldl $ flip $ uncurry $ (fromMaybe id .) . fmap . M.insert) (zip aids tracksVars)
-		pure $ forConcurrently_ (chunksOf 20 (zip aids (zip vars tracksVars))) $ \chunk -> do
-			albums <- liftIO $ HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAlbums client $ HTTP.AlbumIds $ fmap fst chunk
-			for_ (zip chunk (HTTP.unAlbums albums)) $ \((aid, (var, tracksVar)), album) -> do
-				bool (fail $ T.unpack $ "incorrect album returned: expected " <> aid <> " got " <> HTTP.albumId album) (pure ()) $
-					aid == HTTP.albumId album
-				putMVar var $ httpAlbum album
-				maybe (pure ()) (flip putMVar $ HTTP.albumTracks album) tracksVar
+		pure $ do
+			cacheAsyncs <- fmap S.fromList $ for (zip aids (zip vars tracksVars)) $ \spec@(aid, _) ->
+				async $ fmap (spec,) $ cacheGet ctx $ SAlbum aid
+			let
+				done :: forall m. MonadIO m => (T.Text, (MVar Album, Maybe (MVar (Maybe (HTTP.Paging HTTP.TrackS))))) -> Album -> Maybe (HTTP.Paging HTTP.TrackS) -> m ()
+				done (aid, (var, tracksVar)) album paging = do
+					maybe (pure ()) (flip putMVar paging) tracksVar
+					liftIO $ finalize ctx var (SAlbum aid) album (maybe True (const False) paging)
+			let
+				producer s | S.null s = pure ()
+				producer s = do
+					(a, (spec, album)) <- waitAny (S.toList s)
+					case album of
+						Just album -> done spec album Nothing
+						Nothing -> Conduit.yield spec
+					producer $ S.delete a s
+			Conduit.runResourceT $ Conduit.runConduit $
+				(producer cacheAsyncs .|) $
+				(Conduit.chunksOf 20 .|) $
+				((.|) $ Conduit.concurrentMapM_ 4 10 \chunk -> do
+					albums <- liftIO $ HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAlbums client $ HTTP.AlbumIds $ fmap fst chunk
+					for_ (zip chunk (HTTP.unAlbums albums)) $ \((aid, (var, tracksVar)), album) -> do
+						bool (fail $ T.unpack $ "incorrect album returned: expected " <> aid <> " got " <> HTTP.albumId album) (pure ()) $
+							aid == HTTP.albumId album
+						done (aid, (var, tracksVar)) (httpAlbum album) (Just $ HTTP.albumTracks album)
+				) $
+				Conduit.sinkNull
 	tracks <- do
 		let tids = S.toList $ S.filter (flip DM.notMember cache . STrack) $ srcsTracks ss
 		vars <- for tids $ \_ -> newEmptyMVar
 		modifyIORef (ctxCache ctx) $ flip (foldl $ flip $ uncurry $ DM.insert . STrack) (zip tids vars)
-		pure $ forConcurrently_ (chunksOf 50 (zip tids vars)) $ \chunk -> do
-			tracks <- liftIO $ HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getTracks client $ HTTP.TrackIds $ fmap fst chunk
-			for_ (zip chunk (HTTP.unTracks tracks)) $ \((tid, var), track) -> do
-				bool (fail $ T.unpack $ "incorrect track returned: expected " <> tid <> " got " <> HTTP.trackId track) (pure ()) $
-					tid == HTTP.trackId track
-				putMVar var $ httpTrack track
+		pure $ do
+			cacheAsyncs <- fmap S.fromList $ for (zip tids vars) $ \spec@(tid, _) ->
+				async $ fmap (spec,) $ cacheGet ctx $ STrack tid
+			let
+				producer s | S.null s = pure ()
+				producer s = do
+					(a, ((tid, var), track)) <- waitAny (S.toList s)
+					case track of
+						Just track -> liftIO $ finalize ctx var (STrack tid) track True
+						Nothing -> Conduit.yield (tid, var)
+					producer $ S.delete a s
+			Conduit.runResourceT $ Conduit.runConduit $
+				(producer cacheAsyncs .|) $
+				(Conduit.chunksOf 50 .|) $
+				((.|) $ Conduit.concurrentMapM_ 4 10 \chunk -> do
+					tracks <- liftIO $ HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getTracks client $ HTTP.TrackIds $ fmap fst chunk
+					for_ (zip chunk (HTTP.unTracks tracks)) $ \((tid, var), track) -> do
+						bool (fail $ T.unpack $ "incorrect track returned: expected " <> tid <> " got " <> HTTP.trackId track) (pure ()) $
+							tid == HTTP.trackId track
+						finalize ctx var (STrack tid) (httpTrack track) False
+				) $
+				Conduit.sinkNull
+	prep <- traverseASeq (fmap conc . dispatch ctx) ss
 	runConc $
 		(conc playlists *>) $
 		(conc albums *>) $
 		(conc tracks *>) $
-		($ ss) $ traverseASeq $ conc . dispatch ctx
+		traverseASeq (fmap pure) prep
 
 exec :: (MonadIO m, MonadFail m) => Ctx -> Source a -> m (m a)
 exec ctx SCurrentUser = pure $ fmap HTTP.userId $ HTTP.run_ (ctxHTTP ctx) HTTP.getUser
@@ -232,13 +223,15 @@ exec ctx SCurrentlyPlaying = pure $ fmap (getContext &&& getTrack) $ HTTP.run_ (
 		getTrack = httpTrack . HTTP.currentlyPlayingItem
 exec ctx (SAlbumTracks aid) = do
 	album <- fmap (fromJust . DM.lookup (SAlbum aid)) $ readIORef $ ctxCache ctx
-	tracks <- flip fmap (readIORef $ ctxAlbumTracksCache ctx) $ (. M.lookup aid) $ \case
-		Just paging -> do
+	paging <- fmap (M.lookup aid) (readIORef $ ctxAlbumTracksCache ctx)
+	let tracks =
+		-- fallback to full get
+		(maybe (HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getAlbumTracks client aid) pure =<<) $
+		runMaybeT $ do
+			paging <- MaybeT $ pure paging
 			atomicModifyIORef (ctxAlbumTracksCache ctx) $ (, ()) . M.delete aid
-			paging <- takeMVar paging
+			paging <- MaybeT $ takeMVar paging
 			HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPagedContinue (HTTP.getAlbumTracks client aid) paging
-		Nothing -> do
-			HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getAlbumTracks client aid
 	pure $ (fmap . httpTrackS) <$> readMVar album <*> tracks
 exec ctx (SArtist aid) = pure $ fmap httpArtistS $
 	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getArtist client aid
@@ -246,16 +239,18 @@ exec ctx (SArtistAlbums aid) = pure $ fmap (fmap httpAlbumS) $
 	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getArtistAlbums client aid
 -- SPlaylist, STrack and SAlbum should be handled elsewhere
 
-dispatch :: (MonadIO m, MonadFail m) => Ctx -> Source a -> m (m a)
+dispatch :: forall m a. (MonadUnliftIO m, MonadFail m) => Ctx -> Source a -> m (m a)
 dispatch ctx s = fmap (DM.lookup s) (readIORef $ ctxCache ctx) >>= \case
 	Just var -> pure $ readMVar var
 	Nothing -> do
-		var <- liftIO newEmptyMVar
+		var <- newEmptyMVar
 		modifyIORef (ctxCache ctx) $ DM.insert s var
 		act <- exec ctx s
 		pure $ do
-			res <- act
-			putMVar var res
+			(res, cached) <- cacheGet ctx s >>= \case
+				Just res -> pure (res, True)
+				Nothing -> fmap (, False) $ act
+			finalize ctx var s res cached
 			pure res
 
 run :: (MonadUnliftIO m, MonadFail m) => Ctx -> FreerT Source m a -> m a

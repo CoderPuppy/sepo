@@ -3,10 +3,14 @@
 module Sepo.Runtime.Values where
 
 import Control.Monad (join)
+import Control.Monad.Fraxl (GEq(..), GCompare(..), GOrdering(..))
 import Data.Aeson.TH (deriveJSON, defaultOptions, fieldLabelModifier, sumEncoding, SumEncoding(UntaggedValue))
+import Data.Bool (bool)
 import Data.Char (toLower)
 import Data.List (stripPrefix)
 import Data.Maybe (fromJust)
+import Data.Time.Clock (UTCTime)
+import Data.Type.Equality ((:~:)(Refl))
 import qualified Data.Map as M
 import qualified Data.Text as T
 import qualified Sepo.WebClient as HTTP
@@ -73,6 +77,119 @@ instance Applicative m => Applicative (Thunk m) where
 	Strict f <*> Lazy a = Lazy $ f <$> a
 	Lazy f <*> Strict a = Lazy $ ($ a) <$> f
 	Lazy f <*> Lazy a = Lazy $ f <*> a
+
+data Source a where
+	SCurrentUser :: Source T.Text
+	SCurrentUserPlaylists :: Source [Playlist]
+	SPlaylist :: T.Text -> Source Playlist
+	SPlaylistTracks :: T.Text -> Source [(Track, UTCTime)]
+	SCurrentlyPlaying :: Source (Maybe (HTTP.ContextType, T.Text), Track)
+	STrack :: T.Text -> Source Track
+	SAlbum :: T.Text -> Source Album
+	SAlbumTracks :: T.Text -> Source [Track]
+	SArtist :: T.Text -> Source Artist
+	SArtistAlbums :: T.Text -> Source [Album]
+deriving instance Show (Source a)
+instance GEq Source where
+	SCurrentUser `geq` SCurrentUser = Just Refl
+	SCurrentUserPlaylists `geq` SCurrentUserPlaylists = Just Refl
+	SPlaylist a `geq` SPlaylist b = bool (Just Refl) Nothing $ a == b
+	SPlaylistTracks a `geq` SPlaylistTracks b = bool (Just Refl) Nothing $ a == b
+	SCurrentlyPlaying `geq` SCurrentlyPlaying = Just Refl
+	STrack a `geq` STrack b = bool (Just Refl) Nothing $ a == b
+	SAlbum a `geq` SAlbum b = bool (Just Refl) Nothing $ a == b
+	SAlbumTracks a `geq` SAlbumTracks b = bool (Just Refl) Nothing $ a == b
+	SArtist a `geq` SArtist b = bool (Just Refl) Nothing $ a == b
+	SArtistAlbums a `geq` SArtistAlbums b = bool (Just Refl) Nothing $ a == b
+	_ `geq` _ = Nothing
+instance GCompare Source where
+	SCurrentUser `gcompare` SCurrentUser = GEQ
+	SCurrentUser `gcompare` _ = GLT
+	SCurrentUserPlaylists`gcompare` SCurrentUser = GGT
+	SCurrentUserPlaylists`gcompare` SCurrentUserPlaylists = GEQ
+	SCurrentUserPlaylists`gcompare` _ = GLT
+	SPlaylist _ `gcompare` SCurrentUser = GGT
+	SPlaylist _ `gcompare` SCurrentUserPlaylists = GGT
+	SPlaylist a `gcompare` SPlaylist b = case compare a b of
+		LT -> GLT
+		EQ -> GEQ
+		GT -> GGT
+	SPlaylist _ `gcompare` _ = GLT
+	SPlaylistTracks _ `gcompare` SCurrentUser = GGT
+	SPlaylistTracks _ `gcompare` SCurrentUserPlaylists = GGT
+	SPlaylistTracks _ `gcompare` SPlaylist _ = GGT
+	SPlaylistTracks a `gcompare` SPlaylistTracks b = case compare a b of
+		LT -> GLT
+		EQ -> GEQ
+		GT -> GGT
+	SPlaylistTracks _ `gcompare` _ = GLT
+	SCurrentlyPlaying `gcompare` SCurrentUser = GGT
+	SCurrentlyPlaying `gcompare` SCurrentUserPlaylists = GGT
+	SCurrentlyPlaying `gcompare` SPlaylist _ = GGT
+	SCurrentlyPlaying `gcompare` SPlaylistTracks _ = GGT
+	SCurrentlyPlaying `gcompare` SCurrentlyPlaying = GEQ
+	SCurrentlyPlaying `gcompare` _ = GLT
+	STrack _ `gcompare` SCurrentUser = GGT
+	STrack _ `gcompare` SCurrentUserPlaylists = GGT
+	STrack _ `gcompare` SPlaylist _ = GGT
+	STrack _ `gcompare` SPlaylistTracks _ = GGT
+	STrack _ `gcompare` SCurrentlyPlaying = GGT
+	STrack a `gcompare` STrack b = case compare a b of
+		LT -> GLT
+		EQ -> GEQ
+		GT -> GGT
+	STrack _ `gcompare` _ = GLT
+	SAlbum _ `gcompare` SCurrentUser = GGT
+	SAlbum _ `gcompare` SCurrentUserPlaylists = GGT
+	SAlbum _ `gcompare` SPlaylist _ = GGT
+	SAlbum _ `gcompare` SPlaylistTracks _ = GGT
+	SAlbum _ `gcompare` SCurrentlyPlaying = GGT
+	SAlbum _ `gcompare` STrack _ = GGT
+	SAlbum a `gcompare` SAlbum b = case compare a b of
+		LT -> GLT
+		EQ -> GEQ
+		GT -> GGT
+	SAlbum _ `gcompare` _ = GLT
+	SAlbumTracks _ `gcompare` SCurrentUser = GGT
+	SAlbumTracks _ `gcompare` SCurrentUserPlaylists = GGT
+	SAlbumTracks _ `gcompare` SPlaylist _ = GGT
+	SAlbumTracks _ `gcompare` SPlaylistTracks _ = GGT
+	SAlbumTracks _ `gcompare` SCurrentlyPlaying = GGT
+	SAlbumTracks _ `gcompare` STrack _ = GGT
+	SAlbumTracks _ `gcompare` SAlbum _ = GGT
+	SAlbumTracks a `gcompare` SAlbumTracks b = case compare a b of
+		LT -> GLT
+		EQ -> GEQ
+		GT -> GGT
+	SAlbumTracks _ `gcompare` _ = GLT
+	SArtist _ `gcompare` SCurrentUser = GGT
+	SArtist _ `gcompare` SCurrentUserPlaylists = GGT
+	SArtist _ `gcompare` SPlaylist _ = GGT
+	SArtist _ `gcompare` SPlaylistTracks _ = GGT
+	SArtist _ `gcompare` SCurrentlyPlaying = GGT
+	SArtist _ `gcompare` STrack _ = GGT
+	SArtist _ `gcompare` SAlbum _ = GGT
+	SArtist _ `gcompare` SAlbumTracks _ = GGT
+	SArtist a `gcompare` SArtist b = case compare a b of
+		LT -> GLT
+		EQ -> GEQ
+		GT -> GGT
+	SArtist _ `gcompare` _ = GLT
+	SArtistAlbums _ `gcompare` SCurrentUser = GGT
+	SArtistAlbums _ `gcompare` SCurrentUserPlaylists = GGT
+	SArtistAlbums _ `gcompare` SPlaylist _ = GGT
+	SArtistAlbums _ `gcompare` SPlaylistTracks _ = GGT
+	SArtistAlbums _ `gcompare` SCurrentlyPlaying = GGT
+	SArtistAlbums _ `gcompare` STrack _ = GGT
+	SArtistAlbums _ `gcompare` SAlbum _ = GGT
+	SArtistAlbums _ `gcompare` SAlbumTracks _ = GGT
+	SArtistAlbums _ `gcompare` SArtist _ = GGT
+	SArtistAlbums a `gcompare` SArtistAlbums b = case compare a b of
+		LT -> GLT
+		EQ -> GEQ
+		GT -> GGT
+	-- SArtistAlbums _ `gcompare` _ = GLT
+	-- a `gcompare` b = error $ show (a, b)
 
 tracksList :: Tracks -> [Track]
 tracksList (Ordered tracks) = tracks
