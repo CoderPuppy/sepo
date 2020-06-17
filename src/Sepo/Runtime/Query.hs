@@ -128,16 +128,6 @@ finalize ctx var s res cached = do
 fetch :: (MonadUnliftIO m, MonadFail m) => Ctx -> Fetch Source m a
 fetch ctx ss = do
 	cache <- readIORef $ ctxCache ctx
-	playlists <- do
-		let pids = S.toList $ S.filter (flip DM.notMember cache . SPlaylist) $ srcsPlaylists ss
-		vars <- for pids $ \_ -> newEmptyMVar
-		tracksVars <- for pids $ \pid -> if DM.member (SPlaylistTracks pid) cache then pure Nothing else fmap Just newEmptyMVar
-		modifyIORef (ctxCache ctx) $ flip (foldl $ flip $ uncurry $ DM.insert . SPlaylist) (zip pids vars)
-		modifyIORef (ctxPlaylistTracksCache ctx) $ flip (foldl $ flip $ uncurry $ (fromMaybe id .) . fmap . M.insert) (zip pids tracksVars)
-		pure $ forConcurrently_ (zip pids (zip vars tracksVars)) $ \(pid, (var, tracksVar)) -> do
-			playlist <- liftIO $ HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getPlaylist client pid
-			putMVar var $ httpPlaylist playlist
-			maybe (pure ()) (flip putMVar $ HTTP.playlistTracks playlist) tracksVar
 	albums <- do
 		let aids = S.toList $ S.filter (flip DM.notMember cache . SAlbum) $ srcsAlbums ss
 		vars <- for aids $ \_ -> newEmptyMVar
@@ -199,24 +189,35 @@ fetch ctx ss = do
 				Conduit.sinkNull
 	prep <- traverseASeq (fmap conc . dispatch ctx) ss
 	runConc $
-		(conc playlists *>) $
 		(conc albums *>) $
 		(conc tracks *>) $
 		traverseASeq (fmap pure) prep
 
-exec :: (MonadIO m, MonadFail m) => Ctx -> Source a -> m (m a)
+exec :: (MonadUnliftIO m, MonadFail m) => Ctx -> Source a -> m (m a)
 exec ctx SCurrentUser = pure $ fmap HTTP.userId $ HTTP.run_ (ctxHTTP ctx) HTTP.getUser
 exec ctx SCurrentUserPlaylists = pure $ fmap (fmap httpPlaylistS) $
 	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getPlaylists client
-exec ctx (SPlaylistTracks pid) =
-	fmap (fmap $ fmap $ httpTrack . HTTP.playlistTrack &&& HTTP.playlistTrackAddedAt) $
-	flip fmap (readIORef $ ctxPlaylistTracksCache ctx) $ (. M.lookup pid) $ \case
-	Just paging -> do
+exec ctx (SPlaylist pid) = do
+	tracksVar <-
+		(fmap (DM.member $ SPlaylistTracks pid) (readIORef $ ctxCache ctx) >>=) $
+		flip bool (pure Nothing) $ do
+			var <- newEmptyMVar
+			modifyIORef (ctxPlaylistTracksCache ctx) $ M.insert pid var
+			pure $ Just var
+	pure $ do
+		playlist <- liftIO $ HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getPlaylist client pid
+		maybe (pure ()) (flip putMVar $ HTTP.playlistTracks playlist) tracksVar
+		pure $ httpPlaylist playlist
+exec ctx (SPlaylistTracks pid) = do
+	playlist <- dispatch ctx (SPlaylist pid)
+	-- this has to exist because requesting SPlaylist must always perform a request (does not get cached to disk)
+	paging <- fmap (fromJust . M.lookup pid) $ readIORef $ ctxPlaylistTracksCache ctx
+	pure $ do
+		playlist <- playlist
 		atomicModifyIORef (ctxPlaylistTracksCache ctx) $ (, ()) . M.delete pid
 		paging <- takeMVar paging
-		HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPagedContinue (HTTP.getPlaylistTracks client pid) paging
-	Nothing -> do
-		HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getPlaylistTracks client pid
+		tracks <- HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPagedContinue (HTTP.getPlaylistTracks client pid) paging
+		pure $ fmap (httpTrack . HTTP.playlistTrack &&& HTTP.playlistTrackAddedAt) tracks
 exec ctx SCurrentlyPlaying = pure $ fmap (getContext &&& getTrack) $ HTTP.run_ (ctxHTTP ctx) HTTP.getCurrentlyPlaying
 	where
 		getContext = fmap (HTTP.contextType &&& HTTP.contextURI) . HTTP.currentlyPlayingContext

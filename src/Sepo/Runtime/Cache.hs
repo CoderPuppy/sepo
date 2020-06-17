@@ -97,6 +97,7 @@ cachePlace SCurrentUser = Just $ CachePlace {
 		cpDecode = const $ pure . Just . T.decodeUtf8
 	}
 cachePlace SCurrentUserPlaylists = Nothing
+-- this must not be cached, the SPlaylistTracks depends on it being the latest version to invalidate the cache
 cachePlace (SPlaylist _) = Nothing
 cachePlace (SPlaylistTracks pid) = Just $ CachePlace {
 		cpPath = "playlists/" <> T.unpack pid,
