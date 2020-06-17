@@ -120,7 +120,7 @@ finalize ctx var s res cached = do
 		cache <- readIORef $ ctxCache ctx
 		let
 			put :: forall b. Bool -> Source b -> b -> m ()
-			put = Cache.put (ctxCachePath ctx) (\s -> traverse readMVar $ DM.lookup s cache)
+			put = Cache.put (ctxCachePath ctx, ctxFSCache ctx) (\s -> traverse readMVar $ DM.lookup s cache)
 		runConc $
 			(conc (put True s res) *>) $
 			DM.forWithKey_ others' $ \s' v' -> conc $ put False s' =<< readMVar v'

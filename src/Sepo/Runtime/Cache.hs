@@ -73,10 +73,12 @@ dispatch (cachePath, cache) (CacheSource s) = case cachePlace s of
 				res <- runFraxl (fetch_ (cachePath, cache)) $ cpDecode place (dataFetch . CacheSource) bs
 				putMVar var res
 				pure res
-	Nothing -> pure $ pure Nothing
+	Nothing -> pure $ fmap join $ (traverse readMVar =<<) $ fmap (DM.lookup (CacheSource s)) $ readIORef cache
 
-put :: MonadIO m => FilePath -> (forall b. Source b -> m (Maybe b)) -> Bool -> Source a -> a -> m ()
-put cachePath outside overwrite s v = do
+put :: MonadIO m => Ctx -> (forall b. Source b -> m (Maybe b)) -> Bool -> Source a -> a -> m ()
+put (cachePath, cache) outside overwrite s v = do
+	var <- newMVar $ Just v
+	atomicModifyIORef cache $ (, ()) . DM.insert (CacheSource s) var
 	case cachePlace s of
 		Just place -> do
 			let path = cachePath <> "/" <> cpPath place
