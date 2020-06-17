@@ -68,8 +68,11 @@ dispatch (cachePath, cache) (CacheSource s) = case cachePlace s of
 			DM.insertLookupWithKey (\_ _ old -> old) (CacheSource s) var
 		pure $ flip fromMaybe (fmap readMVar existing) $ do
 			let path = cachePath <> "/" <> cpPath place
-			(doesFileExist path >>=) $ bool (pure Nothing) $
-				liftIO (BS.readFile path) >>= (runFraxl (fetch_ (cachePath, cache)) . cpDecode place (dataFetch . CacheSource))
+			(doesFileExist path >>=) $ bool (pure Nothing) $ do
+				bs <- liftIO $ BS.readFile path
+				res <- runFraxl (fetch_ (cachePath, cache)) $ cpDecode place (dataFetch . CacheSource) bs
+				putMVar var res
+				pure res
 	Nothing -> pure $ pure Nothing
 
 put :: MonadIO m => FilePath -> (forall b. Source b -> m (Maybe b)) -> Bool -> Source a -> a -> m ()
