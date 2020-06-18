@@ -49,6 +49,10 @@ cmds queryCtx = Trie.fromList [
 					" from spotify:album:", albumId $ trackAlbum track,
 					")"
 				]
+			),
+		(("fetch",) $ \args -> do
+			pls <- Query.dataFetch Query.SCurrentUserPlaylists
+			for_ pls $ Query.dataFetch . SPlaylistTracks . playlistId
 			)
 	]
 
