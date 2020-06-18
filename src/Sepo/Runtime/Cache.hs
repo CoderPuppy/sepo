@@ -99,6 +99,7 @@ cachePlace SCurrentUser = Just $ CachePlace {
 cachePlace SCurrentUserPlaylists = Nothing
 -- this must not be cached, the SPlaylistTracks depends on it being the latest version to invalidate the cache
 cachePlace (SPlaylist _) = Nothing
+-- this depends on SPlaylist not being cached and being prefetched (see Query.exec _ (SPlaylistTracks _))
 cachePlace (SPlaylistTracks pid) = Just $ CachePlace {
 		cpPath = "playlists/" <> T.unpack pid,
 		cpEncode = \get tracks -> runMaybeT $ do
