@@ -6,10 +6,6 @@ module Sepo.Runtime.Query (
 ) where
 
 import Conduit ((.|))
-import qualified Conduit as Conduit
-import qualified Data.Conduit.List as Conduit (chunksOf)
-import qualified Data.Conduit.ConcurrentMap as Conduit
-import Data.Functor.Identity
 import Control.Applicative
 import Control.Arrow
 import Control.Lens ((^.), set)
@@ -26,6 +22,7 @@ import Control.Monad.Trans.State.Lazy (execStateT)
 import Data.Bool (bool)
 import Data.Dependent.Map.Lens
 import Data.Foldable
+import Data.Functor.Identity
 import Data.Functor.Identity (Identity(runIdentity))
 import Data.List.Split (chunksOf)
 import Data.Maybe (fromMaybe, fromJust, isNothing)
@@ -34,13 +31,16 @@ import UnliftIO.Async
 import UnliftIO.Directory (createDirectoryIfMissing)
 import UnliftIO.IORef
 import UnliftIO.MVar
+import qualified Conduit as Conduit
+import qualified Data.Conduit.ConcurrentMap as Conduit
+import qualified Data.Conduit.List as Conduit (chunksOf)
 import qualified Data.Dependent.Map as DM
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
 
-import Sepo.Runtime.Values
 import Sepo.Runtime.Cache (CacheSource)
+import Sepo.Runtime.Values
 import qualified Sepo.Runtime.Cache as Cache
 import qualified Sepo.WebClient as HTTP
 
@@ -224,6 +224,8 @@ exec ctx SCurrentlyPlaying = pure $ (pure (),) $
 	where
 		getContext = fmap (HTTP.contextType &&& HTTP.contextURI) . HTTP.currentlyPlayingContext
 		getTrack = httpTrack . HTTP.currentlyPlayingItem
+exec ctx (STrack aid) = fail "BROKEN: STrack should be prefetched"
+exec ctx (SAlbum aid) = fail "BROKEN: SAlbum should be prefetched"
 exec ctx (SAlbumTracks aid) = do
 	album <- fmap (fromJust . DM.lookup (SAlbum aid)) $ readIORef $ ctxCache ctx
 	paging <- fmap (M.lookup aid) (readIORef $ ctxAlbumTracksCache ctx)
@@ -240,7 +242,6 @@ exec ctx (SArtist aid) = pure $ (pure (),) $ fmap httpArtistS $
 	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getArtist client aid
 exec ctx (SArtistAlbums aid) = pure $ (pure (),) $ fmap (fmap httpAlbumS) $
 	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getArtistAlbums client aid
--- SPlaylist, STrack and SAlbum should be handled elsewhere
 
 dispatch :: forall m a. (MonadUnliftIO m, MonadFail m) => Ctx -> Source a -> m (m a)
 dispatch ctx s = fmap (DM.lookup s) (readIORef $ ctxCache ctx) >>= \case
