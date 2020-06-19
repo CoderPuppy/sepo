@@ -120,7 +120,7 @@ executeFieldAssignment ctx (PlaylistId pl_id) cmd = do
 		HTTP.run_ (httpCtx ctx) $ \client -> HTTP.addTracks client pl_id $ HTTP.AddTracks
 			(fmap (("spotify:track:" <>) . trackId) chunk) Nothing
 	snapshotId <- foldl ((. addTracks) . (*>)) (pure snapshotId) (drop 1 chunks)
-	liftIO $ T.appendFile (aliasesPath ctx) $ "spotify:playlist:" <> pl_id <> " = " <> reify PPrefix cmd <> ";\n"
+	liftIO $ T.appendFile (aliasesPath ctx) $ "spotify:playlist:" <> pl_id <> " = " <> reify minBound cmd <> ";\n"
 	modifyIORef (aliases ctx) $ M.insert (Left pl_id) cmd
 	pure $ Value {
 		tracks = pure tracks,
@@ -152,7 +152,7 @@ executeFieldAssignment ctx (AliasName name) cmd = do
 		go nms (Shuffle a) = fmap Shuffle $ go nms a
 		go nms c = pure c
 	(cmd', changed) <- runWriterT $ go (S.singleton name) cmd
-	liftIO $ T.appendFile (aliasesPath ctx) $ "_" <> reifyQuoted name <> " = " <> reify PPrefix cmd' <> ";\n"
+	liftIO $ T.appendFile (aliasesPath ctx) $ "_" <> reifyQuoted name <> " = " <> reify minBound cmd' <> ";\n"
 	modifyIORef (aliases ctx) $ M.insert (Right name) cmd'
 	pure val
 executeFieldAssignment ctx Playing cmd = do
