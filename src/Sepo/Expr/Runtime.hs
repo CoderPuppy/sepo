@@ -236,7 +236,8 @@ compileFilter ctx (TrackId tr_id) = pure $ mempty { Filter.posPred = \track -> (
 compileFilter ctx (AlbumId al_id) = pure $ mempty { Filter.posPred = \track -> (== al_id) $ albumId $ trackAlbum track }
 compileFilter ctx (ArtistId ar_id) = pure $ mempty { Filter.posPred = \track -> elem ar_id $ fmap artistId $ trackArtists track }
 compileFilter ctx Empty = pure mempty
-compileFilter ctx (Seq a b) = executeCmd ctx a >> compileFilter ctx b
+compileFilter ctx (Seq a b) = executeCmd ctx a *> compileFilter ctx b
+compileFilter ctx (RevSeq a b) = compileFilter ctx a <* executeCmd ctx b
 compileFilter ctx (Concat a b) = Filter.union <$> compileFilter ctx a <*> compileFilter ctx b
 compileFilter ctx (Intersect a b) = Filter.intersect <$> compileFilter ctx a <*> compileFilter ctx b
 compileFilter ctx (Subtract a b) = Filter.subtract <$> compileFilter ctx a <*> compileFilter ctx b
