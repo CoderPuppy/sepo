@@ -29,6 +29,7 @@ dependencies:
 - mtl >= 2.2 && < 2.3
 - unliftio >= 0.2 && < 0.3
 - unliftio-core >= 0.1 && < 0.2
+- text-trie >= 0.2 && < 0.3
 
 ghc-options:
 - -Wno-tabs
@@ -81,7 +82,6 @@ executables:
     - -with-rtsopts=-N
     dependencies:
     - sepo
-    - text-trie >= 0.2 && < 0.3
 
 tests:
   sepo-test:

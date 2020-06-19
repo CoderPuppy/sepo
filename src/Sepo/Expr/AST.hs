@@ -22,6 +22,7 @@ data Cmd
 	| PlayingSong
 	| Empty
 	| Seq Cmd Cmd
+	| RevSeq Cmd Cmd
 	| Concat Cmd Cmd
 	| Subtract Cmd Cmd
 	| Intersect Cmd Cmd
@@ -31,6 +32,9 @@ data Cmd
 
 assign :: FieldAccess -> Cmd -> FieldAccess
 assign field cmd = field { fieldAccessAssignments = fieldAccessAssignments field ++ [cmd] }
+
+assignOp :: FieldAccess -> (Cmd -> Cmd) -> FieldAccess
+assignOp field op = assign field $ op $ Field $ field { fieldAccessAssignments = [] }
 
 assConcat :: FieldAccess -> Cmd -> FieldAccess
 assConcat field cmd = assign field $ Concat (Field $ field { fieldAccessAssignments = [] }) cmd
@@ -47,7 +51,7 @@ assUnique field = assign field $ Unique (Field $ field { fieldAccessAssignments 
 assShuffle :: FieldAccess -> FieldAccess
 assShuffle field = assign field $ Shuffle (Field $ field { fieldAccessAssignments = [] })
 
-data Prec = PSeq | PPrefix | PPosNeg | PAnd | PPostfix | PUnit deriving (Eq, Ord, Show)
+data Prec = PAssign | PPrefix | PSeq | PPosNeg | PIntersect | PPostfix | PUnit deriving (Eq, Ord, Show, Bounded)
 
 parens :: Bool -> Text -> Text
 parens True t = "(" <> t <> ")"
@@ -74,10 +78,8 @@ instance Reify Field where
 
 instance Reify FieldAccess where
 	reify d (FieldAccess f []) = reify d f
-	reify d (FieldAccess f cmds) | d > PPrefix && d <= PPostfix =
-		reify PUnit f <> mconcat (fmap (("!= " <>) . reify PUnit) cmds)
-	reify d (FieldAccess f cmds) = parens (d > PPrefix) $
-		reify PPostfix f <> mconcat (fmap ((" = " <>) . reify PPrefix) cmds)
+	reify d (FieldAccess f (cmd:cmds)) = parens (d > PAssign) $
+		reify PSeq (FieldAccess f cmds) <> " = " <> reify PAssign cmd
 
 instance Reify Cmd where
 	reify d (Field f) = reify d f
@@ -86,9 +88,10 @@ instance Reify Cmd where
 	reify d (ArtistId ar_id) = "spotify:artist:" <> ar_id
 	reify d PlayingSong = "playing_song"
 	reify d Empty = "empty"
-	reify d (Seq a b) = parens (d > PSeq) $ reify PSeq a <> "; " <> reify PSeq b
+	reify d (Seq a b) = parens (d > PSeq) $ reify PSeq a <> " *> " <> reify PSeq b
+	reify d (RevSeq a b) = parens (d > PSeq) $ reify PSeq a <> " <* " <> reify PSeq b
 	reify d (Concat a b) = parens (d > PPosNeg) $ reify PPosNeg a <> " + " <> reify PPosNeg b
-	reify d (Subtract a b) = parens (d > PPosNeg) $ reify PPosNeg a <> " - " <> reify PAnd b
-	reify d (Intersect a b) = parens (d > PAnd) $ reify PAnd a <> " & " <> reify PAnd b
+	reify d (Subtract a b) = parens (d > PPosNeg) $ reify PPosNeg a <> " - " <> reify PIntersect b
+	reify d (Intersect a b) = parens (d > PIntersect) $ reify PIntersect a <> " & " <> reify PIntersect b
 	reify d (Unique a) = parens (d > PPrefix) $ "unique " <> reify PPrefix a
 	reify d (Shuffle a) = parens (d > PPrefix) $ "shuffle " <> reify PPrefix a

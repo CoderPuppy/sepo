@@ -1,9 +1,9 @@
 module Sepo.BoolLogic where
 
-import qualified Data.Set as S
-import Data.List (intercalate)
 import Data.Foldable
+import Data.List (intercalate)
 import Prelude hiding (subtract)
+import qualified Data.Set as S
 
 {- This module is used for proving that the formulas for intersect and subtract in Sepo.Execution are correct
  - -}

@@ -2,15 +2,14 @@
 
 module Sepo.Expr.Runtime where
 
-import Control.Monad.IO.Class
 import Control.Monad (join)
+import Control.Monad.IO.Class
 import Control.Monad.Trans.Class (lift)
 import Control.Monad.Trans.Writer.CPS (runWriterT, tell)
 import Data.Aeson (encodeFile, decodeFileStrict)
 import Data.Char (isAlphaNum)
 import Data.Either (partitionEithers)
 import Data.Foldable (find, for_)
-import UnliftIO.IORef
 import Data.List.Split (chunksOf)
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Monoid (Any(..))
@@ -19,19 +18,22 @@ import Prelude hiding (subtract)
 import Sepo.Expr.AST
 import Sepo.Expr.Parser
 import Sepo.Runtime.Values
-import UnliftIO.Directory (createDirectoryIfMissing, doesFileExist)
-import UnliftIO.Environment (getEnv)
 import Text.Megaparsec
 import Text.Megaparsec.Char
+import UnliftIO.Directory (createDirectoryIfMissing, doesFileExist)
+import UnliftIO.Environment (getEnv)
+import UnliftIO.IORef
 import qualified DBus.Client as DBus (Client, connectSession)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
+import qualified Control.Monad.Trans.Writer as WriterT
+
 import qualified Sepo.DBusClient as DBus
 import qualified Sepo.Runtime.Filter as Filter
-import qualified Sepo.WebClient as HTTP
 import qualified Sepo.Runtime.Query as Query
+import qualified Sepo.WebClient as HTTP
 
 data Context = Context {
 	httpCtx :: HTTP.Ctx,
@@ -54,9 +56,10 @@ start httpCtx = do
 			True -> do
 				txt <- liftIO $ T.readFile aliasesPath
 				let
-					p = fmap M.fromList $ many $ (,) <$> f <* ws <* chunk "=" <* ws <*> cmd5 <* ws <* single ';' <* ws
+					p = fmap M.fromList $ many $
+						(,) <$> f <* ws <* chunk "=" <* ws <*> fmap exprCmd expr <* ws <* single ';' <* ws
 					f = chunk "spotify:playlist:" *> fmap Left (takeWhileP (Just "playlist id") isAlphaNum) <|> chunk "_" *> fmap Right quoted
-				case runParser p aliasesPath txt of
+				case runParser (fmap fst $ WriterT.runWriterT p) aliasesPath txt of
 					Left err -> do
 						liftIO $ putStrLn $ errorBundlePretty err
 						newIORef M.empty
@@ -195,6 +198,7 @@ executeCmd ctx PlayingSong = do
 		}
 executeCmd ctx Empty = pure $ Value (pure $ Unordered M.empty) Nothing
 executeCmd ctx (Seq a b) = executeCmd ctx a *> executeCmd ctx b
+executeCmd ctx (RevSeq a b) = executeCmd ctx a <* executeCmd ctx b
 executeCmd ctx (Concat a b) = do
 	a <- executeCmd ctx a
 	b <- executeCmd ctx b

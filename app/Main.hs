@@ -1,29 +1,30 @@
 module Main where
 
 import Control.Monad.IO.Class
+import Control.Monad.Trans.Writer
 import Data.Foldable
 import Data.String
-import UnliftIO.Environment (getArgs, getEnv)
 import System.Exit (exitFailure)
 import System.IO (stderr)
 import Text.Megaparsec (runParser, eof, errorBundlePretty)
+import UnliftIO.Environment (getArgs, getEnv)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.IO as TL
 import qualified Data.Trie.Text as Trie
 
-import qualified Sepo.Expr.AST as Expr
-import qualified Sepo.Expr.Runtime as Expr
 import Sepo.Runtime.Values
+import qualified Sepo.Expr.AST as Expr
 import qualified Sepo.Expr.Parser as Expr
+import qualified Sepo.Expr.Runtime as Expr
 import qualified Sepo.Runtime.Query as Query
 
 cmds :: Query.Ctx -> Trie.Trie ([T.Text] -> Query.FreerT Query.Source IO ())
 cmds queryCtx = Trie.fromList [
 		(("eval",) $ \args -> do
 			let txt = T.intercalate " " args
-			cmd <- case runParser (Expr.cmd <* eof) "cmdline" txt of
+			cmd <- case runParser (fmap fst $ runWriterT $ fmap Expr.exprCmd Expr.expr <* eof) "cmdline" txt of
 				Left err -> do
 					liftIO $ putStrLn "Parse error"
 					liftIO $ putStr $ errorBundlePretty err

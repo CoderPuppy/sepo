@@ -1,10 +1,9 @@
 module Sepo.WebClient where
 
-import Control.Monad.IO.Class
 import Control.Arrow
 import Control.Monad
+import Control.Monad.IO.Class
 import Data.Aeson
-import UnliftIO.IORef
 import Data.Maybe
 import Data.Proxy
 import Data.Time.Clock (UTCTime)
@@ -15,6 +14,7 @@ import Network.HTTP.Types.Status (status401)
 import Servant.API
 import Servant.Client hiding (Client)
 import UnliftIO.Environment (getEnv)
+import UnliftIO.IORef
 import Web.FormUrlEncoded (ToForm(..))
 import qualified Data.ByteString.Base64 as B64
 import qualified Data.Map as M

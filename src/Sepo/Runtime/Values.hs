@@ -13,6 +13,7 @@ import Data.Time.Clock (UTCTime)
 import Data.Type.Equality ((:~:)(Refl))
 import qualified Data.Map as M
 import qualified Data.Text as T
+
 import qualified Sepo.WebClient as HTTP
 
 type MultiSet a = M.Map a Int
