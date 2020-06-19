@@ -82,6 +82,7 @@ executables:
     - -with-rtsopts=-N
     dependencies:
     - sepo
+    - optparse-applicative >= 0.15 && < 0.16
 
 tests:
   sepo-test:
