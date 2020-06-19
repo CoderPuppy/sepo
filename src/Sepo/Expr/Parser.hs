@@ -2,14 +2,16 @@
 
 module Sepo.Expr.Parser where
 
+import Debug.Trace
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Trans.Writer
+import Data.Bool (bool)
 import Data.Char
 import Data.Foldable
 import Data.List (sortOn)
 import Data.Maybe
-import Data.Void
+import Data.Void (Void)
 import Sepo.Expr.AST
 import Text.Megaparsec hiding (many, some)
 import Text.Megaparsec.Char
@@ -61,12 +63,10 @@ ws = do
 options :: [T.Text] -> Parser ()
 options = asum . fmap (void . chunk)
 
-data PrefixMode = Exact | MostPrecise | Always deriving (Show, Eq)
-
 data PrefixEntry = PrefixEntry {
 	preName :: T.Text,
-	preMode :: PrefixMode,
-	preParse :: T.Text -> Parser Expr
+	preExclusive :: Bool,
+	preParse :: Parser Expr
 }
 
 prefixBuild :: [([T.Text], PrefixEntry)] -> Trie.Trie PrefixEntry
@@ -75,9 +75,7 @@ prefixBuild es =
 		(\trie (prefix, e) -> let
 				conflicting = do
 					(prefix', e', _) <- Trie.match trie prefix
-					case preMode e' of
-						Always -> Just ()
-						_ -> Nothing
+					bool Nothing (Just ()) $ preExclusive e'
 					pure (prefix', e')
 			in case conflicting of
 				Just (prefix', e') -> error $
@@ -92,15 +90,13 @@ prefixBuild es =
 		pre <- pres
 		pure (pre, e)
 
-prefixParse :: Trie.Trie PrefixEntry -> Parser a -> Parser Expr
-prefixParse table word = do
-	(word, _) <- lookAhead $ match word
+prefixParse :: Trie.Trie PrefixEntry -> Parser Expr
+prefixParse table = do
+	word <- getInput
 	case Trie.match table word of
-		Just (prefix, e, rest) -> case preMode e of
-			Exact | rest /= "" -> empty
-			_ -> do
-				chunk prefix
-				preParse e rest
+		Just (prefix, e, _) -> do
+			chunk prefix
+			label (T.unpack $ preName e) $ preParse e
 		Nothing -> empty
 
 isWordChar :: Char -> Bool
@@ -124,53 +120,57 @@ assignableOp modify op e = do
 
 prefixes :: Trie.Trie PrefixEntry
 prefixes = prefixBuild $ execWriter $ do
-	tell $ pure $ (["_"],) $ PrefixEntry "alias" Always $ \text ->
-		(chunk text *>) $
+	tell $ pure $ (["("],) $ PrefixEntry "parentheses" True $ expr <* single ')'
+	tell $ pure $ (["_"],) $ PrefixEntry "alias" True $
 		fmap (EField . flip FieldAccess [] . AliasName) $
-		if T.null text
-		then quoted
-		else pure text
-	tell $ pure $ ([""],) $ PrefixEntry "playlist name" MostPrecise $ \text ->
-		(chunk text *>) $
+		quoted <|> takeWhile1P (Just "alias name") isWordChar
+	tell $ pure $ ([""],) $ PrefixEntry "playlist name" False $
 		fmap (EField . flip FieldAccess [] . PlaylistName) $
-		if T.null text
-		then quoted
-		else pure text
-	tell $ pure $ (["p:", "pl:", "playlist:", "spotify:playlist:"],) $ PrefixEntry "playlist id" Always $ \text -> do
-		chunk text
-		guard $ T.all isAlphaNum text
-		pure $ EField $ flip FieldAccess [] $ PlaylistId text
-	tell $ pure $ (["spotify:user:"],) $ PrefixEntry "user playlist id" Always $ \text -> do
-		chunk text
-		[_user, "playlist", pl_id] <- pure $ T.splitOn ":" text
+		quoted <|> takeWhile1P (Just "playlist name") isWordChar
+	tell $ pure $ (["p:", "pl:", "playlist:", "spotify:playlist:"],) $ PrefixEntry "playlist id" True $ do
+		pl_id <- takeWhile1P (Just "playlist id") isAlphaNum
+		notFollowedBy $ satisfy isWordChar
 		pure $ EField $ flip FieldAccess [] $ PlaylistId pl_id
-	tell $ pure $ (["t:", "tr:", "track:", "spotify:track:"],) $ PrefixEntry "track id" Always $ \text -> do
-		chunk text
-		guard $ T.all isAlphaNum text
-		pure $ ECmd $ TrackId text
-	tell $ pure $ (["al:", "album:", "spotify:album:"],) $ PrefixEntry "album id" Always $ \text -> do
-		chunk text
-		guard $ T.all isAlphaNum text
-		pure $ ECmd $ AlbumId text
-	tell $ pure $ (["ar:", "artist:", "spotify:artist:"],) $ PrefixEntry "artist id" Always $ \text -> do
-		chunk text
-		guard $ T.all isAlphaNum text
-		pure $ ECmd $ ArtistId text
-	tell $ pure $ (["playing", "current"],) $ PrefixEntry "playing" Exact $ const $
+	tell $ pure $ (["spotify:user:"],) $ PrefixEntry "user playlist id" True $ do
+		takeWhile1P (Just "user id") isAlphaNum
+		chunk ":playlist:"
+		pl_id <- takeWhile1P (Just "playlist id") isAlphaNum
+		notFollowedBy $ satisfy isWordChar
+		pure $ EField $ flip FieldAccess [] $ PlaylistId pl_id
+	tell $ pure $ (["t:", "tr:", "track:", "spotify:track:"],) $ PrefixEntry "track id" True $ do
+		tr_id <- takeWhile1P (Just "track id") isAlphaNum
+		notFollowedBy $ satisfy isWordChar
+		pure $ ECmd $ TrackId tr_id
+	tell $ pure $ (["al:", "album:", "spotify:album:"],) $ PrefixEntry "album id" True $ do
+		al_id <- takeWhile1P (Just "album id") isAlphaNum
+		notFollowedBy $ satisfy isWordChar
+		pure $ ECmd $ AlbumId al_id
+	tell $ pure $ (["ar:", "artist:", "spotify:artist:"],) $ PrefixEntry "artist id" True $ do
+		ar_id <- takeWhile1P (Just "artist id") isAlphaNum
+		notFollowedBy $ satisfy isWordChar
+		pure $ ECmd $ ArtistId ar_id
+	tell $ pure $ (["playing", "current"],) $ PrefixEntry "playing" False $ do
+		notFollowedBy $ satisfy isWordChar
 		pure $ EField $ FieldAccess Playing []
-	tell $ pure $ (["playing_song", "current_song"],) $ PrefixEntry "playing song" Exact $ const $
+	tell $ pure $ (["playing_song", "current_song"],) $ PrefixEntry "playing song" False $ do
+		notFollowedBy $ satisfy isWordChar
 		pure $ ECmd PlayingSong
-	tell $ pure $ (["empty", "ε", "ø"],) $ PrefixEntry "empty" Exact $ const $
+	tell $ pure $ (["empty", "ε", "ø"],) $ PrefixEntry "empty" False $ do
+		notFollowedBy $ satisfy isWordChar
 		pure $ ECmd Empty
-	tell $ pure $ (["union"],) $ PrefixEntry "union" Exact $ const $
+	tell $ pure $ (["union"],) $ PrefixEntry "union" False $ do
+		notFollowedBy $ satisfy isWordChar
 		fmap (ECmd . compoundUnion) $ ws *> compound
-	tell $ pure $ (["intersect", "intersection"],) $ PrefixEntry "intersect" Exact $ const $
+	tell $ pure $ (["intersect", "intersection"],) $ PrefixEntry "intersect" False $ do
+		notFollowedBy $ satisfy isWordChar
 		fmap (ECmd . compoundIntersect) $ ws *> compound
-	tell $ pure $ (["seq", "sequence"],) $ PrefixEntry "sequence" Exact $ const $
+	tell $ pure $ (["seq", "sequence"],) $ PrefixEntry "sequence" False $ do
+		notFollowedBy $ satisfy isWordChar
 		fmap (ECmd . compoundSequence) $ ws *> compound
 	
 	for_ unaryOps $ \(names, op) -> do
-		tell $ pure $ (names,) $ PrefixEntry (head names) Exact $ const $ do
+		tell $ pure $ (names,) $ PrefixEntry (head names) False $ do
+			notFollowedBy $ satisfy isWordChar
 			modify <- optional $ single '!' *> notFollowedBy (satisfy isOperatorChar)
 			ws
 			e <- exprPrecs !! 5
@@ -247,9 +247,7 @@ binop names isEndChar op = do
 	pure $ flip $ assignableOp (isJust modify) . flip op . exprCmd
 
 exprPrecs = scanl (flip ($))
-	(   prefixParse prefixes (takeWhileP (Just "word") isWordChar <* notFollowedBy (satisfy isWordChar))
-	<|> (char '(' *> ws *> expr <* ws <* char ')')
-	)
+	(prefixParse prefixes)
 	[
 		\next -> postops next $ \left -> asum $ flip fmap unaryOps $ \(names, op) -> do
 			single '!'
