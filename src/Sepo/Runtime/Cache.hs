@@ -5,8 +5,12 @@ import Control.Monad
 import Control.Monad.Fraxl
 import Control.Monad.IO.Class
 import Control.Monad.IO.Unlift
+import Control.Monad.Trans.Class
 import Control.Monad.Trans.Maybe
+import Control.Monad.Trans.Writer
 import Data.Bool (bool)
+import Data.Char (isAlphaNum)
+import Data.Foldable
 import Data.List (uncons)
 import Data.Maybe (fromMaybe)
 import Data.Traversable
@@ -25,7 +29,10 @@ import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Lazy.Encoding as TL
+import qualified Text.Megaparsec as MP
+import qualified Text.Megaparsec.Char as MP
 
+import Sepo.Expr.Parser as Parser
 import Sepo.Runtime.Values
 
 data CachePlace a = CachePlace {
@@ -105,22 +112,34 @@ cachePlace (SPlaylistTracks pid) = Just $ CachePlace {
 		cpEncode = \get tracks -> runMaybeT $ do
 			pl <- MaybeT $ get $ SPlaylist pid
 			pure $ TL.encodeUtf8 $ TL.unlines $
-				(TL.fromStrict (playlistSnapshotId pl):) $
-				flip fmap tracks $ \(track, addedAt) -> TL.unwords [
+				("#SEPO:SNAPID " <> TL.fromStrict (playlistSnapshotId pl):) $
+				flip fmap tracks $ \(track, addedAt) -> mconcat [
+					"spotify:track:",
 					TL.fromStrict $ trackId track,
+					" #SEPO:ADDEDAT ",
 					TL.pack $ show addedAt
 				]
 			,
 		cpDecode = \get bs -> runMaybeT $ do
-			(snapshotId, trackLines) <- MaybeT $ pure $ uncons $ T.lines $ T.decodeUtf8 bs
+			(tracks, comments) <- MaybeT $ pure $ either (const Nothing) Just $
+				MP.runParser (runWriterT parser) ("cachePlace (SPlaylistTracks " <> show pid <> ")") (T.decodeUtf8 bs)
+			[snapshotId] <- pure $ comments >>= (toList . T.stripPrefix "SEPO:SNAPID " . MP.stateInput)
 			pl <- MaybeT $ get $ SPlaylist pid
 			guard $ snapshotId == playlistSnapshotId pl
-			MaybeT $ fmap sequenceA $ for trackLines $ \trackLine -> runMaybeT $ do
-				(tid, timeWords) <- MaybeT $ pure $ uncons $ T.words trackLine
-				time <- MaybeT $ pure $ readMaybe $ T.unpack $ T.unwords timeWords
+			tracks <- for tracks $ \(pos, (tid, addedAt)) -> do
+				guard pos
 				track <- MaybeT $ get $ STrack tid
-				pure (track, time)
+				pure (track, addedAt)
+			pure tracks
 	}
+	where
+		parser = Parser.compoundInner' $ do
+			options ["spotify:track:", "track:", "tr:", "t:"]
+			tid <- MP.takeWhile1P (Just "track id") isAlphaNum
+			(_, [comment]) <- listen Parser.wsFlat
+			Just time <- pure $ T.stripPrefix "SEPO:ADDEDAT " $ MP.stateInput comment
+			Just time <- pure $ readMaybe $ T.unpack time
+			pure (tid, time)
 cachePlace SCurrentlyPlaying = Nothing
 cachePlace (STrack tid) = Just $ CachePlace {
 		cpPath = "tracks/" <> T.unpack tid,
@@ -134,13 +153,22 @@ cachePlace (SAlbum aid) = Just $ CachePlace {
 		cpEncode = const $ pure . Just . Aeson.encode,
 		cpDecode = const $ pure . Aeson.decodeStrict
 	}
-cachePlace (SAlbumTracks pid) = Just $ CachePlace {
-		cpPath = "albums/" <> T.unpack pid <> "-tracks",
-		cpEncode = const $ pure . Just . TL.encodeUtf8 . TL.unlines . fmap (TL.fromStrict . trackId),
-		cpDecode = \get bs ->
-			let tids = T.lines $ T.decodeUtf8 bs
-			in fmap sequenceA $ for tids $ get . STrack
+cachePlace (SAlbumTracks aid) = Just $ CachePlace {
+		cpPath = "albums/" <> T.unpack aid <> "-tracks",
+		cpEncode = const $ pure . Just . TL.encodeUtf8 . TL.unlines .
+			fmap (("spotify:track:" <>) . TL.fromStrict . trackId),
+		cpDecode = \get bs -> runMaybeT $ do
+			(tracks, _) <- MaybeT $ pure $ either (const Nothing) Just $
+				MP.runParser (runWriterT parser) ("cachePlace (SAlbumTracks " <> show aid <> ")") (T.decodeUtf8 bs)
+			tracks <- for tracks $ \(pos, tid) -> do
+				guard pos
+				MaybeT $ get $ STrack tid
+			pure tracks
 	}
+	where
+		parser = Parser.compoundInner' $ do
+			options ["spotify:track:", "track:", "tr:", "t:"]
+			MP.takeWhile1P (Just "track id") isAlphaNum
 cachePlace (SArtist aid) = Just $ CachePlace {
 		cpPath = "artists/" <> T.unpack aid,
 		-- TODO: don't need to save id

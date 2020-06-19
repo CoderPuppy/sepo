@@ -67,7 +67,6 @@ start httpCtx = do
 				newIORef M.empty
 	pure $ Context {..}
 
-
 findPlaylist :: (Query.MonadFraxl Query.Source m, MonadIO m) => Context -> T.Text -> m (Maybe Playlist)
 findPlaylist ctx name = do
 	pls <- Query.dataFetch Query.SCurrentUserPlaylists

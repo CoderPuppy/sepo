@@ -61,7 +61,7 @@ ws = do
 		wsFlat
 
 options :: [T.Text] -> Parser ()
-options = asum . fmap (void . chunk)
+options = asum . fmap (void . chunk) . sortOn (negate . T.length)
 
 data PrefixEntry = PrefixEntry {
 	preName :: T.Text,
