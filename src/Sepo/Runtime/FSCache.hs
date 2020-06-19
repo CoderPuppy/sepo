@@ -1,4 +1,4 @@
-module Sepo.Runtime.Cache where
+module Sepo.Runtime.FSCache where
 
 import Control.Applicative
 import Control.Monad

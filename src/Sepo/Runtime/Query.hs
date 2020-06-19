@@ -39,9 +39,9 @@ import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
 
-import Sepo.Runtime.Cache (CacheSource)
+import Sepo.Runtime.FSCache (CacheSource)
 import Sepo.Runtime.Values
-import qualified Sepo.Runtime.Cache as Cache
+import qualified Sepo.Runtime.FSCache as FSCache
 import qualified Sepo.WebClient as HTTP
 
 instance (Applicative f, MonadFail m) => MonadFail (FreeT f m) where
@@ -86,7 +86,7 @@ data Ctx = Ctx {
 	-- the only reason this should be filled with Nothing is if the general information (SAlbum) is not in the in-memory cache
 	-- but is in the filesystem cache, then the batch fetcher will promise to provide it before realizing it doesn't have to make a request
 	ctxAlbumTracksCache :: IORef (M.Map T.Text (MVar (Maybe (HTTP.Paging HTTP.TrackS)))),
-	ctxFSCache :: IORef Cache.Cache,
+	ctxFSCache :: IORef FSCache.Cache,
 	ctxHTTP :: HTTP.Ctx
 }
 
@@ -104,7 +104,7 @@ start ctxCachePath = do
 	pure $ Ctx {..}
 
 cacheGet :: MonadUnliftIO m => Ctx -> Source a -> m (Maybe a)
-cacheGet ctx = runFraxl (Cache.fetch_ (ctxCachePath ctx, ctxFSCache ctx)) .  dataFetch . Cache.CacheSource
+cacheGet ctx = runFraxl (FSCache.fetch_ (ctxCachePath ctx, ctxFSCache ctx)) .  dataFetch . FSCache.CacheSource
 
 finalize :: forall m a. MonadUnliftIO m => Ctx -> MVar a -> Source a -> a -> Bool -> m ()
 finalize ctx var s res cached = do
@@ -115,7 +115,7 @@ finalize ctx var s res cached = do
 		cache <- readIORef $ ctxCache ctx
 		let
 			put :: forall b. Bool -> Source b -> b -> m ()
-			put = Cache.put (ctxCachePath ctx, ctxFSCache ctx) (\s -> traverse readMVar $ DM.lookup s cache)
+			put = FSCache.put (ctxCachePath ctx, ctxFSCache ctx) (\s -> traverse readMVar $ DM.lookup s cache)
 		runConc $
 			(conc (put True s res) *>) $
 			DM.forWithKey_ others' $ \s' v' -> conc $ put False s' =<< readMVar v'
@@ -206,7 +206,7 @@ exec ctx (SPlaylist pid) = do
 		maybe (pure ()) (flip putMVar $ HTTP.playlistTracks playlist) tracksVar
 		pure $ httpPlaylist playlist
 exec ctx (SPlaylistTracks pid) = do
-	-- this prefetches SPlaylist pid for the FS cache, see Cache.cachePlace (SPlaylistTracks _)
+	-- this prefetches SPlaylist pid for the FS cache, see FSCache.cachePlace (SPlaylistTracks _)
 	playlist <- dispatch ctx $ SPlaylist pid
 	paging <- fmap (M.lookup pid) (readIORef $ ctxPlaylistTracksCache ctx)
 	pure $ (void playlist,) $
