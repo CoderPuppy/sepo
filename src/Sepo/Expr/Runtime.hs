@@ -43,12 +43,12 @@ data Context = Context {
 	aliases :: IORef (M.Map (Either T.Text T.Text) Cmd)
 }
 
-start :: (Query.MonadFraxl Query.Source m, MonadIO m) => HTTP.Ctx -> m Context
+start :: (Query.MonadFraxl Source m, MonadIO m) => HTTP.Ctx -> m Context
 start httpCtx = do
 	dbusClient <- liftIO DBus.connectSession
 	home <- getEnv "HOME"
-	Query.dataFetch Query.SCurrentUser
-	Query.dataFetch Query.SCurrentUserPlaylists
+	Query.dataFetch SCurrentUser
+	Query.dataFetch SCurrentUserPlaylists
 	let aliasesPath = home <> "/.config/sepo/aliases"
 	aliases <- do
 		doesFileExist aliasesPath >>= \case
@@ -70,18 +70,18 @@ start httpCtx = do
 				newIORef M.empty
 	pure $ Context {..}
 
-findPlaylist :: (Query.MonadFraxl Query.Source m, MonadIO m) => Context -> T.Text -> m (Maybe Playlist)
+findPlaylist :: (Query.MonadFraxl Source m, MonadIO m) => Context -> T.Text -> m (Maybe Playlist)
 findPlaylist ctx name = do
-	pls <- Query.dataFetch Query.SCurrentUserPlaylists
+	pls <- Query.dataFetch SCurrentUserPlaylists
 	pure $ find ((== name) . playlistName) pls
 
-executeField :: (Query.MonadFraxl Query.Source m, MonadIO m, MonadFail m) => Context -> Field -> m (Value m)
+executeField :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Field -> m (Value m)
 executeField ctx (PlaylistId pl_id) = do
-	playlist <- Query.dataFetch $ Query.SPlaylist pl_id
+	playlist <- Query.dataFetch $ SPlaylist pl_id
 	pure $ Value {
 		tracks = Lazy $
 			-- TODO: check for a Sepo tag for unordered
-			fmap (Ordered . fmap fst) $ Query.dataFetch $ Query.SPlaylistTracks pl_id
+			fmap (Ordered . fmap fst) $ Query.dataFetch $ SPlaylistTracks pl_id
 			,
 		existing = Just $ ExPlaylist playlist
 	}
@@ -92,7 +92,7 @@ executeField ctx (AliasName name) = do
 	alias <- readIORef (aliases ctx) >>= maybe (fail $ "unknown alias: " <> T.unpack name) pure . M.lookup (Right name)
 	executeCmd ctx alias
 executeField ctx Playing = do
-	(context, _) <- Query.dataFetch $ Query.SCurrentlyPlaying
+	(context, _) <- Query.dataFetch $ SCurrentlyPlaying
 	(contextType, contextURI) <- maybe (fail "incognito?") pure context
 	case contextType of
 		HTTP.CTPlaylist -> executeField ctx $ PlaylistId $ (!! 2) $ T.splitOn ":" contextURI
@@ -112,10 +112,10 @@ executeField ctx (File path) = do
 			let cmd = mode cmds
 			executeCmd ctx cmd
 
-executeFieldAssignment :: (Query.MonadFraxl Query.Source m, MonadIO m, MonadFail m) => Context -> Field -> Cmd -> m (Value m)
+executeFieldAssignment :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Field -> Cmd -> m (Value m)
 executeFieldAssignment ctx (PlaylistId pl_id) cmd = do
 	val <- executeCmd ctx cmd
-	playlist <- Query.dataFetch $ Query.SPlaylist pl_id
+	playlist <- Query.dataFetch $ SPlaylist pl_id
 	tracks <- force $ tracks val
 	let chunks = chunksOf 100 $ tracksList tracks
 	snapshotId <- fmap HTTP.snapshotRespId $
@@ -135,7 +135,7 @@ executeFieldAssignment ctx (PlaylistName name) cmd = do
 	pl_id <- findPlaylist ctx name >>= \case
 		Just pl -> pure $ playlistId pl
 		Nothing -> do
-			userId <- Query.dataFetch Query.SCurrentUser
+			userId <- Query.dataFetch SCurrentUser
 			pl <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.createPlaylist client userId $
 				HTTP.CreatePlaylist name Nothing Nothing (Just "created by Sepo")
 			pure $ HTTP.playlistId pl
@@ -194,34 +194,34 @@ executeFieldAssignment ctx (File path) cmd = do
 	liftIO $ T.writeFile path $ reify minBound cmd'
 	pure val
 
-executeCmd :: (Query.MonadFraxl Query.Source m, MonadIO m, MonadFail m) => Context -> Cmd -> m (Value m)
+executeCmd :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Cmd -> m (Value m)
 executeCmd ctx (Field (FieldAccess field [])) = executeField ctx field
 executeCmd ctx (Field (FieldAccess field [cmd])) = executeFieldAssignment ctx field cmd
 executeCmd ctx (Field (FieldAccess field (cmd:cmds))) = do
 	executeFieldAssignment ctx field cmd
 	executeCmd ctx $ Field $ FieldAccess field cmds
 executeCmd ctx (TrackId tr_id) = pure $ Value {
-		tracks = Lazy $ fmap (Ordered . pure) $ Query.dataFetch $ Query.STrack tr_id,
+		tracks = Lazy $ fmap (Ordered . pure) $ Query.dataFetch $ STrack tr_id,
 		existing = Nothing
 	}
 executeCmd ctx (AlbumId al_id) = do
-	album <- Query.dataFetch $ Query.SAlbum al_id
+	album <- Query.dataFetch $ SAlbum al_id
 	pure $ Value {
-		tracks = Lazy $ fmap Ordered $ Query.dataFetch $ Query.SAlbumTracks al_id,
+		tracks = Lazy $ fmap Ordered $ Query.dataFetch $ SAlbumTracks al_id,
 		existing = Just $ ExAlbum album
 	}
 executeCmd ctx (ArtistId ar_id) = do
-	artist <- Query.dataFetch $ Query.SArtist ar_id
+	artist <- Query.dataFetch $ SArtist ar_id
 	pure $ Value {
 		tracks = Lazy $ do
-			albums <- Query.dataFetch $ Query.SArtistAlbums ar_id
-			trackss <- for albums $ Query.dataFetch . Query.SAlbumTracks . albumId
+			albums <- Query.dataFetch $ SArtistAlbums ar_id
+			trackss <- for albums $ Query.dataFetch . SAlbumTracks . albumId
 			pure $ Unordered $ M.fromList $ fmap (, 1) $ filter (any ((== ar_id) . artistId) . trackArtists) $ join $ trackss
 			,
 		existing = Just $ ExArtist artist
 	}
 executeCmd ctx PlayingSong = do
-	(_, track) <- Query.dataFetch $ Query.SCurrentlyPlaying
+	(_, track) <- Query.dataFetch $ SCurrentlyPlaying
 	pure $ Value {
 			tracks = Strict $ Ordered [track],
 			existing = Nothing
@@ -258,7 +258,7 @@ executeCmd ctx (Unique cmd) = do
 	pure $ Value (fmap (Unordered . M.map (const 1) . tracksSet) $ tracks val) Nothing
 executeCmd ctx (Shuffle a) = fail "TODO: shuffle"
 
-compileFilter :: (Query.MonadFraxl Query.Source m, MonadIO m, MonadFail m) => Context -> Cmd -> m Filter.Filter
+compileFilter :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Cmd -> m Filter.Filter
 compileFilter ctx (Field (FieldAccess (AliasName name) [])) = do
 	alias <- readIORef (aliases ctx) >>= maybe (fail $ "unknown alias: " <> T.unpack name) pure . M.lookup (Right name)
 	compileFilter ctx alias
