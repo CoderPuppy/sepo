@@ -15,6 +15,7 @@ import Servant.API
 import Servant.Client hiding (Client)
 import UnliftIO.Environment (getEnv)
 import UnliftIO.IORef
+import UnliftIO.MVar
 import Web.FormUrlEncoded (ToForm(..))
 import qualified Data.ByteString.Base64 as B64
 import qualified Data.Map as M
@@ -29,7 +30,7 @@ clientEnv man = mkClientEnv man (BaseUrl Https "api.spotify.com" 443 "/v1")
 data Ctx = Ctx {
 	ctxMan :: Manager,
 	ctxPath :: FilePath,
-	ctxTokenRef :: IORef T.Text,
+	ctxTokenRef :: IORef (MVar T.Text),
 	ctxClientId :: T.Text,
 	ctxClientSecret :: T.Text,
 	ctxRefreshToken :: T.Text
@@ -41,7 +42,7 @@ start = do
 	home <- getEnv "HOME"
 	let ctxPath = home <> "/.config/sepo"
 	token <- liftIO $ T.readFile $ ctxPath <> "/token"
-	ctxTokenRef <- newIORef token
+	ctxTokenRef <- newIORef =<< newMVar token
 	ctxClientId <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/client-id"
 	ctxClientSecret <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/client-secret"
 	ctxRefreshToken <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/refresh-token"
@@ -49,7 +50,7 @@ start = do
 
 run :: MonadIO m => Ctx -> (Client -> ClientM a) -> m (Either ClientError a)
 run ctx m = do
-	token <- readIORef $ ctxTokenRef ctx
+	token <- (>>= readMVar) $ readIORef $ ctxTokenRef ctx
 	res <- liftIO $ runClientM (m $ makeClient token) (clientEnv $ ctxMan ctx)
 	case res of
 		Left (FailureResponse req res) | responseStatusCode res == status401 -> do
@@ -66,6 +67,8 @@ run_ ctx m = run ctx m >>= \case
 
 refreshAccessToken :: MonadIO m => Ctx -> m (Either ClientError ())
 refreshAccessToken ctx = do
+	var <- newEmptyMVar
+	atomicWriteIORef (ctxTokenRef ctx) var
 	res <- liftIO $ runClientM
 		(client (Proxy :: Proxy AuthAPI)
 			(("Basic " <>) $ T.decodeUtf8 $ B64.encode $ T.encodeUtf8 $ ctxClientId ctx <> ":" <> ctxClientSecret ctx)
@@ -75,7 +78,7 @@ refreshAccessToken ctx = do
 		Left err -> pure $ Left err
 		Right (RefreshedToken {..}) -> do
 			liftIO $ T.writeFile (ctxPath ctx <> "/token") refreshedTokenAccessToken
-			writeIORef (ctxTokenRef ctx) refreshedTokenAccessToken
+			putMVar var refreshedTokenAccessToken
 			pure $ Right ()
 
 type AuthAPI = "token" :> Header' '[Required, Strict] "Authorization" T.Text :> ReqBody '[FormUrlEncoded] RefreshToken :> Post '[JSON] RefreshedToken
