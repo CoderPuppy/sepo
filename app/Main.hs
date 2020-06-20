@@ -6,6 +6,7 @@ import Control.Arrow
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Writer
+import Data.Bool (bool)
 import Data.Dependent.Sum
 import Data.Foldable
 import Data.List (intercalate)
@@ -73,11 +74,17 @@ runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 			")"
 		]
 runCmd opts queryCtx (CFetch (FetchOpts {..})) = do
-	when fetchUserPlaylists $ do
+	ops <- pure []
+	ops <- fmap (++ ops) $ flip (bool (pure [])) fetchUserPlaylists $ do
 		liftIO $ putStrLn "fetching user playlists"
-		pls <- Query.dataFetch Query.SCurrentUserPlaylists
-		for_ pls $ Query.dataFetch . SPlaylistTracks . playlistId
-	when fetchExisting $ do
+		pure $ pure (
+				do
+					pls <- Query.dataFetch Query.SCurrentUserPlaylists
+					for_ pls $ Query.dataFetch . SPlaylistTracks . playlistId
+					,
+				pure ()
+			)
+	ops <- fmap (++ ops) $ flip (bool (pure [])) fetchExisting $ do
 		liftIO $ putStrLn "refetching cached"
 		useFSCache <- liftIO $ atomicModifyIORef (Query.ctxUseFSCache queryCtx) $ const False &&& id
 		-- Conduit.runConduit $
@@ -86,9 +93,14 @@ runCmd opts queryCtx (CFetch (FetchOpts {..})) = do
 		-- 		void $ Query.dataFetch src
 		entries <- FSCache.entries (Query.ctxCachePath queryCtx)
 		-- liftIO $ putStrLn $ intercalate ", " $ fmap (\(src :=> path) -> show (src, path)) $ entries
-		for_ entries $ \(src :=> path) -> do
-			void $ Query.dataFetch src
-		atomicWriteIORef (Query.ctxUseFSCache queryCtx) useFSCache
+		pure $ pure (
+				for_ entries $ \(src :=> path) -> do
+					void $ Query.dataFetch src
+					,
+				atomicWriteIORef (Query.ctxUseFSCache queryCtx) useFSCache
+			)
+	for_ ops fst
+	for_ ops snd
 
 args :: Args.ParserInfo (Options, Command)
 args = flip Args.info
