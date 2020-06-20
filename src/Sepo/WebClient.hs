@@ -171,6 +171,7 @@ type SpotifyAPI = Header' '[Required, Strict] "Authorization" T.Text :>
 	:<|> "playlists" :> Capture "playlist_id" T.Text :> "tracks" :> PagedPath PlaylistTrack
 
 	:<|> "artists" :> Capture "artist_id" T.Text :> Get '[JSON] ArtistS -- TODO: really a full Artist
+	:<|> "artists" :> QueryParam' '[Required, Strict] "ids" ArtistIds :> Get '[JSON] Artists
 	:<|> "artists" :> Capture "artist_id" T.Text :> "albums" :> PagedPath AlbumS -- TODO: include_groups parameter
 
 	:<|> "albums" :> Capture "album_id" T.Text :> Get '[JSON] Album
@@ -200,6 +201,7 @@ data Client = Client {
 	getPlaylistTracks :: T.Text -> PagedFn PlaylistTrack,
 
 	getArtist :: T.Text -> ClientM ArtistS,
+	getArtists :: ArtistIds -> ClientM Artists,
 	getArtistAlbums :: T.Text -> PagedFn AlbumS,
 
 	getAlbum :: T.Text -> ClientM Album,
@@ -224,7 +226,7 @@ data Client = Client {
 makeClient token = Client {..}
 	where getUser :<|> getPlaylists :<|>
 		getPlaylist :<|> getPlaylistTracks :<|>
-		getArtist :<|> getArtistAlbums :<|>
+		getArtist :<|> getArtists :<|> getArtistAlbums :<|>
 		getAlbum :<|> getAlbums :<|> getAlbumTracks :<|>
 		getTrack :<|> getTracks :<|>
 		createPlaylist :<|> changePlaylistDetails :<|>
@@ -492,6 +494,14 @@ instance FromJSON AlbumS where
 		-- <*> o .: "release_date_precision"
 		-- <*> o .: "restrictions"
 		<*> o .: "uri"
+
+newtype ArtistIds = ArtistIds { unArtistIds :: [T.Text] } deriving (Show)
+instance ToHttpApiData ArtistIds where
+	toQueryParam (ArtistIds ids) = T.intercalate "," ids
+
+newtype Artists = Artists { unArtists :: [ArtistS] } deriving (Show)
+instance FromJSON Artists where
+	parseJSON = withObject "Artists" $ \o -> Artists <$> o.: "artists"
 
 data ArtistS = ArtistS {
 	artistSExternalUrls :: M.Map T.Text T.Text,

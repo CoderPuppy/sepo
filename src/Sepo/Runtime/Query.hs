@@ -55,11 +55,17 @@ srcsTracks ANil = S.empty
 srcsTracks (ACons (STrack tid) t) = S.insert tid $ srcsTracks t
 srcsTracks (ACons _ t) = srcsTracks t
 
+-- this also includes SAlbumTracks, to prefetch SAlbum for them
 srcsAlbums :: ASeq Source a -> S.Set T.Text
 srcsAlbums ANil = S.empty
 srcsAlbums (ACons (SAlbum aid) t) = S.insert aid $ srcsAlbums t
 srcsAlbums (ACons (SAlbumTracks aid) t) = S.insert aid $ srcsAlbums t
 srcsAlbums (ACons _ t) = srcsAlbums t
+
+srcsArtists :: ASeq Source a -> S.Set T.Text
+srcsArtists ANil = S.empty
+srcsArtists (ACons (SArtist aid) t) = S.insert aid $ srcsArtists t
+srcsArtists (ACons _ t) = srcsArtists t
 
 srcOthers :: Source a -> a -> DM.DMap Source Identity
 srcOthers s v = case (s, v) of
@@ -189,10 +195,38 @@ fetch ctx ss = do
 						finalize ctx var (STrack tid) (httpTrack track) False
 				) $
 				Conduit.sinkNull
+	-- this is prefetched to allow batching
+	artists <- do
+		let aids = S.toList $ S.filter (flip DM.notMember cache . SArtist) $ srcsArtists ss
+		vars <- for aids $ \_ -> newEmptyMVar
+		modifyIORef (ctxCache ctx) $ flip (foldl $ flip $ uncurry $ DM.insert . SArtist) (zip aids vars)
+		pure $ do
+			cacheAsyncs <- fmap S.fromList $ for (zip aids vars) $ \spec@(aid, _) ->
+				async $ fmap (spec,) $ cacheGet ctx $ SArtist aid
+			let
+				producer s | S.null s = pure ()
+				producer s = do
+					(a, ((aid, var), artist)) <- waitAny (S.toList s)
+					case artist of
+						Just artist -> liftIO $ finalize ctx var (SArtist aid) artist True
+						Nothing -> Conduit.yield (aid, var)
+					producer $ S.delete a s
+			Conduit.runResourceT $ Conduit.runConduit $
+				(producer cacheAsyncs .|) $
+				(Conduit.chunksOf 50 .|) $
+				((.|) $ Conduit.concurrentMapM_ 4 10 \chunk -> do
+					artists <- liftIO $ HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getArtists client $ HTTP.ArtistIds $ fmap fst chunk
+					for_ (zip chunk (HTTP.unArtists artists)) $ \((aid, var), artist) -> do
+						bool (fail $ T.unpack $ "incorrect artist returned: expected " <> aid <> " got " <> HTTP.artistSId artist) (pure ()) $
+							aid == HTTP.artistSId artist
+						finalize ctx var (SArtist aid) (httpArtistS artist) False
+				) $
+				Conduit.sinkNull
 	prep <- traverseASeq (fmap conc . dispatch ctx) ss
 	runConc $
 		(conc albums *>) $
 		(conc tracks *>) $
+		(conc artists *>) $
 		traverseASeq (fmap pure) prep
 
 exec :: (MonadUnliftIO m, MonadFail m) => Ctx -> Source a -> m (m (), m a)
@@ -243,8 +277,7 @@ exec ctx (SAlbumTracks aid) = do
 			paging <- MaybeT $ takeMVar paging
 			HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPagedContinue (HTTP.getAlbumTracks client aid) paging
 	pure $ (pure (),) $ (fmap . httpTrackS) <$> readMVar album <*> tracks
-exec ctx (SArtist aid) = pure $ (pure (),) $ fmap httpArtistS $
-	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getArtist client aid
+exec ctx (SArtist aid) = fail "BROKEN: SArtist should be prefetched"
 exec ctx (SArtistAlbums aid) = pure $ (pure (),) $ fmap (fmap httpAlbumS) $
 	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getArtistAlbums client aid
 
