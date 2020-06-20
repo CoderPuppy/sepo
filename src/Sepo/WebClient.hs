@@ -5,16 +5,20 @@ import Control.Concurrent.QSem
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.IO.Unlift
+import Control.Retry
 import Data.Aeson
+import Data.List (find)
 import Data.Maybe
 import Data.Proxy
 import Data.Time.Clock (UTCTime)
 import GHC.Exts (IsList(..))
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client.TLS (newTlsManager)
-import Network.HTTP.Types.Status (status401)
+import Network.HTTP.Types.Status
 import Servant.API
 import Servant.Client hiding (Client)
+import Text.Read (readMaybe)
+import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Environment (getEnv)
 import UnliftIO.Exception (bracket_)
 import UnliftIO.IORef
@@ -22,6 +26,7 @@ import UnliftIO.MVar
 import Web.FormUrlEncoded (ToForm(..))
 import qualified Data.ByteString.Base64 as B64
 import qualified Data.Map as M
+import qualified Data.Sequence as Seq
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
@@ -37,7 +42,8 @@ data Ctx = Ctx {
 	ctxClientId :: T.Text,
 	ctxClientSecret :: T.Text,
 	ctxRefreshToken :: T.Text,
-	ctxQSem :: QSem
+	ctxQSem :: QSem,
+	ctxHold :: IORef (Maybe (MVar ()))
 }
 
 start :: MonadIO m => m Ctx
@@ -50,20 +56,66 @@ start = do
 	ctxClientId <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/client-id"
 	ctxClientSecret <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/client-secret"
 	ctxRefreshToken <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/refresh-token"
-	ctxQSem <- liftIO $ newQSem 4 -- TODO: config
+	ctxQSem <- liftIO $ newQSem 10 -- TODO: config
+	ctxHold <- newIORef Nothing
 	pure $ Ctx {..}
 
+retryHold :: MonadIO m =>
+	RetryPolicyM m -> IORef (Maybe (MVar ())) ->
+	(RetryStatus -> a -> m RetryAction) ->
+	(RetryStatus -> m a) ->
+	m a
+retryHold policy hold check act = go Nothing defaultRetryStatus
+	where
+		go ourHold status = do
+			case ourHold of
+				Nothing -> readIORef hold >>= maybe (pure ()) readMVar
+				Just _ -> pure ()
+			res <- act status
+			action <- check status res
+			status' <- case action of
+				DontRetry -> pure Nothing
+				ConsultPolicy -> applyPolicy policy status
+				ConsultPolicyOverrideDelay delay -> applyPolicy (RetryPolicyM $ fmap (fmap $ fmap $ const delay) $ getRetryPolicyM policy) status
+			case status' of
+				Just status' -> do
+					ourHold <- flip fromMaybe (fmap (pure . Just) ourHold) $ do
+						ourHold <- newEmptyMVar
+						atomicModifyIORef hold $ \case
+							Nothing -> (Just ourHold, Just ourHold)
+							Just hold -> (Just hold, Nothing)
+					maybe (pure ()) threadDelay $ rsPreviousDelay status'
+					go ourHold status'
+				Nothing -> do
+					flip (maybe (pure ())) ourHold $ \ourHold -> do
+						atomicWriteIORef hold Nothing
+						putMVar ourHold ()
+					pure res
+
 run :: MonadIO m => Ctx -> (Client -> ClientM a) -> m (Either ClientError a)
-run ctx m = liftIO $ bracket_ (waitQSem $ ctxQSem ctx) (signalQSem $ ctxQSem ctx) $ do
-	token <- (>>= readMVar) $ readIORef $ ctxTokenRef ctx
-	res <- liftIO $ runClientM (m $ makeClient token) (clientEnv $ ctxMan ctx)
-	case res of
-		Left (FailureResponse req res) | responseStatusCode res == status401 -> do
-			liftIO $ putStrLn $ "refreshing access token because a response failed with status 401: " <> show res
-			refreshAccessToken ctx >>= \case
-				Left err -> pure $ Left err
-				Right () -> run ctx m
-		res -> pure res
+run ctx m = liftIO $
+	bracket_ (waitQSem $ ctxQSem ctx) (signalQSem $ ctxQSem ctx) $
+	do
+		token <- (>>= readMVar) $ readIORef $ ctxTokenRef ctx
+		retryHold
+			(fibonacciBackoff 1_000_000) -- 1 second
+			(ctxHold ctx)
+			(const $ pure . \case
+				(Left (FailureResponse req res)) | responseStatusCode res == tooManyRequests429 ->
+					maybe ConsultPolicy ConsultPolicyOverrideDelay $ do
+						(_, val) <- find ((== "retry-after") . fst) $ responseHeaders res
+						seconds <- readMaybe $ T.unpack $ T.decodeUtf8 val
+						pure $ seconds * 1_000_000
+				_ -> DontRetry)
+			$ const $ do
+				res <- liftIO $ runClientM (m $ makeClient token) (clientEnv $ ctxMan ctx)
+				case res of
+					Left (FailureResponse req res) | responseStatusCode res == unauthorized401 -> do
+						liftIO $ putStrLn $ "refreshing access token because a response failed with status 401: " <> show res
+						refreshAccessToken ctx >>= \case
+							Left err -> pure $ Left err
+							Right () -> run ctx m
+					res -> pure res
 
 run_ :: (MonadIO m, MonadFail m) => Ctx -> (Client -> ClientM a) -> m a
 run_ ctx m = run ctx m >>= \case

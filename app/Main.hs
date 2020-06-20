@@ -85,7 +85,7 @@ runCmd opts queryCtx (CFetch (FetchOpts {..})) = do
 		-- 	Conduit.mapM_C $ \(src :=> path) -> do
 		-- 		void $ Query.dataFetch src
 		entries <- FSCache.entries (Query.ctxCachePath queryCtx)
-		liftIO $ putStrLn $ intercalate ", " $ fmap (\(src :=> path) -> show (src, path)) $ entries
+		-- liftIO $ putStrLn $ intercalate ", " $ fmap (\(src :=> path) -> show (src, path)) $ entries
 		for_ entries $ \(src :=> path) -> do
 			void $ Query.dataFetch src
 		atomicWriteIORef (Query.ctxUseFSCache queryCtx) useFSCache
