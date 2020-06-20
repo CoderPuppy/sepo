@@ -115,20 +115,27 @@ cachePlace (SPlaylistTracks pid) = Just $ CachePlace {
 		cpEncode = \get tracks -> runMaybeT $ do
 			pl <- MaybeT $ get $ SPlaylist pid
 			pure $ TL.encodeUtf8 $ TL.unlines $
-				("#SEPO:SNAPID " <> TL.fromStrict (playlistSnapshotId pl):) $
+				("#SEPO:PL:SNAPID " <> TL.fromStrict (playlistSnapshotId pl):) $
+				("#SEPO:PL:NAME " <> TL.pack (show (playlistName pl)):) $
+				("#SEPO:MODE union":) $
 				flip fmap tracks $ \(track, addedAt) -> mconcat [
 					"spotify:track:",
 					TL.fromStrict $ trackId track,
-					" #SEPO:ADDEDAT ",
+					" #SEPO:PL:ADDEDAT ",
 					TL.pack $ show addedAt
 				]
 			,
 		cpDecode = \get bs -> runMaybeT $ do
 			(tracks, comments) <- MaybeT $ pure $ either (const Nothing) Just $
 				MP.runParser (runWriterT parser) ("cachePlace (SPlaylistTracks " <> show pid <> ")") (T.decodeUtf8 bs)
-			[snapshotId] <- pure $ comments >>= (toList . T.stripPrefix "SEPO:SNAPID " . MP.stateInput)
+			[snapshotId] <- pure $ comments >>= (toList . T.stripPrefix "SEPO:PL:SNAPID " . MP.stateInput)
+			-- this is also invalidated when the name changes
+			-- this is to make it easier to determine what playlist is what from the files
+			[name] <- pure $ comments >>= (toList . T.stripPrefix "SEPO:PL:NAME " . MP.stateInput)
+			name <- MaybeT $ pure $ readMaybe $ T.unpack name
 			pl <- MaybeT $ get $ SPlaylist pid
 			guard $ snapshotId == playlistSnapshotId pl
+			guard $ name == playlistName pl
 			tracks <- for tracks $ \(pos, (tid, addedAt)) -> do
 				guard pos
 				track <- MaybeT $ get $ STrack tid
@@ -140,7 +147,7 @@ cachePlace (SPlaylistTracks pid) = Just $ CachePlace {
 			options ["spotify:track:", "track:", "tr:", "t:"]
 			tid <- MP.takeWhile1P (Just "track id") isAlphaNum
 			(_, [comment]) <- listen Parser.wsFlat
-			Just time <- pure $ T.stripPrefix "SEPO:ADDEDAT " $ MP.stateInput comment
+			Just time <- pure $ T.stripPrefix "SEPO:PL:ADDEDAT " $ MP.stateInput comment
 			Just time <- pure $ readMaybe $ T.unpack time
 			pure (tid, time)
 cachePlace SCurrentlyPlaying = Nothing
@@ -158,8 +165,9 @@ cachePlace (SAlbum aid) = Just $ CachePlace {
 	}
 cachePlace (SAlbumTracks aid) = Just $ CachePlace {
 		cpPath = "albums/" <> T.unpack aid <> "-tracks",
-		cpEncode = const $ pure . Just . TL.encodeUtf8 . TL.unlines .
-			fmap (("spotify:track:" <>) . TL.fromStrict . trackId),
+		cpEncode = const $ \tracks -> pure $ Just $ TL.encodeUtf8 $ TL.unlines $
+			("#SEPO:MODE union":) $
+			fmap (("spotify:track:" <>) . TL.fromStrict . trackId) tracks,
 		cpDecode = \get bs -> runMaybeT $ do
 			(tracks, _) <- MaybeT $ pure $ either (const Nothing) Just $
 				MP.runParser (runWriterT parser) ("cachePlace (SAlbumTracks " <> show aid <> ")") (T.decodeUtf8 bs)
