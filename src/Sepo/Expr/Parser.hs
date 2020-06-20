@@ -23,7 +23,7 @@ type Parser a = WriterT [State T.Text Void] (Parsec Void T.Text) a
 data Expr = EField FieldAccess | ECmd Cmd deriving (Show)
 exprField :: MonadFail m => Expr -> m FieldAccess
 exprField (EField f) = pure f
-exprField (ECmd _) = fail "expected field"
+exprField (ECmd cmd) = fail $ "expected field, got: " <> T.unpack (reify minBound cmd)
 exprCmd :: Expr -> Cmd
 exprCmd (EField f) = Field f
 exprCmd (ECmd cmd) = cmd
