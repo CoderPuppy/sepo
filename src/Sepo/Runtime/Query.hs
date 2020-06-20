@@ -18,6 +18,7 @@ import Control.Monad.State.Class (modify)
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Fraxl.Free
 import Control.Monad.Trans.Maybe
+import Control.Monad.Trans.Resource (MonadResource(..))
 import Control.Monad.Trans.State.Lazy (execStateT)
 import Data.Bool (bool)
 import Data.Dependent.Map.Lens
@@ -46,6 +47,8 @@ import qualified Sepo.WebClient as HTTP
 
 instance (Applicative f, MonadFail m) => MonadFail (FreeT f m) where
 	fail = lift . fail
+instance (Applicative f, MonadResource m) => MonadResource (FreeT f m) where
+	liftResourceT = lift . liftResourceT
 
 srcsTracks :: ASeq Source a -> S.Set T.Text
 srcsTracks ANil = S.empty
@@ -87,6 +90,7 @@ data Ctx = Ctx {
 	-- but is in the filesystem cache, then the batch fetcher will promise to provide it before realizing it doesn't have to make a request
 	ctxAlbumTracksCache :: IORef (M.Map T.Text (MVar (Maybe (HTTP.Paging HTTP.TrackS)))),
 	ctxFSCache :: IORef FSCache.Cache,
+	ctxUseFSCache :: IORef Bool,
 	ctxHTTP :: HTTP.Ctx
 }
 
@@ -100,11 +104,12 @@ start ctxCachePath = do
 	ctxPlaylistTracksCache <- newIORef M.empty
 	ctxAlbumTracksCache <- newIORef M.empty
 	ctxFSCache <- newIORef DM.empty
+	ctxUseFSCache <- newIORef True
 	ctxHTTP <- HTTP.start
 	pure $ Ctx {..}
 
 cacheGet :: MonadUnliftIO m => Ctx -> Source a -> m (Maybe a)
-cacheGet ctx = runFraxl (FSCache.fetch_ (ctxCachePath ctx, ctxFSCache ctx)) .  dataFetch . FSCache.CacheSource
+cacheGet ctx s = (readIORef (ctxUseFSCache ctx) >>=) $ bool (pure Nothing) $ runFraxl (FSCache.fetch_ (ctxCachePath ctx, ctxFSCache ctx)) $  dataFetch $ FSCache.CacheSource s
 
 finalize :: forall m a. MonadUnliftIO m => Ctx -> MVar a -> Source a -> a -> Bool -> m ()
 finalize ctx var s res cached = do

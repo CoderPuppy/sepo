@@ -1,5 +1,6 @@
 module Sepo.Runtime.FSCache where
 
+import Conduit ((.|))
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Fraxl
@@ -10,17 +11,19 @@ import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.Writer
 import Data.Bool (bool)
 import Data.Char (isAlphaNum)
+import Data.Dependent.Sum
 import Data.Foldable
-import Data.List (uncons)
+import Data.List (uncons, stripPrefix)
 import Data.Maybe (fromMaybe)
 import Data.Traversable
 import Data.Tuple (swap)
 import Data.Type.Equality ((:~:)(Refl))
 import Text.Read (readMaybe)
 import UnliftIO.Async
-import UnliftIO.Directory (doesFileExist)
+import UnliftIO.Directory
 import UnliftIO.IORef
 import UnliftIO.MVar
+import qualified Conduit as Conduit
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
@@ -176,3 +179,73 @@ cachePlace (SArtist aid) = Just $ CachePlace {
 		cpDecode = const $ pure . Aeson.decodeStrict
 	}
 cachePlace (SArtistAlbums _) = Nothing
+
+entriesConduit :: (MonadIO m, Conduit.MonadResource m) => FilePath -> Conduit.ConduitT i (DSum Source (Const FilePath)) m ()
+entriesConduit cachePath = do
+	do
+		let path = cachePath <> "/user-id"
+		(doesFileExist path >>=) $ bool (pure ()) $ Conduit.yield (SCurrentUser :=> Const path)
+	do
+		let dirPath = cachePath <> "/tracks/"
+		let dirPath' = T.pack dirPath
+		(Conduit.sourceDirectory dirPath .|) $
+			Conduit.concatMapMC $ \path -> runMaybeT $ do
+				tr_id <- MaybeT $ pure $ T.stripPrefix dirPath' $ T.pack path
+				guard $ T.all isAlphaNum tr_id
+				pure $ STrack tr_id :=> Const path
+	do
+		let dirPath = cachePath <> "/albums/"
+		let dirPath' = T.pack dirPath
+		(Conduit.sourceDirectory dirPath .|) $
+			Conduit.concatMapMC $ \path -> runMaybeT $ do
+				name <- MaybeT $ pure $ T.stripPrefix dirPath' $ T.pack path
+				let (al_id, tracks) = maybe (name, False) (, True) $ T.stripSuffix "-tracks" name
+				guard $ T.all isAlphaNum al_id
+				pure $ bool ((:=> Const path) . SAlbum) ((:=> Const path) . SAlbumTracks) tracks al_id
+	do
+		let dirPath = cachePath <> "/playlists/"
+		let dirPath' = T.pack dirPath
+		(Conduit.sourceDirectory dirPath .|) $
+			Conduit.concatMapMC $ \path -> runMaybeT $ do
+				pl_id <- MaybeT $ pure $ T.stripPrefix dirPath' $ T.pack path
+				guard $ T.all isAlphaNum pl_id
+				pure $ SPlaylistTracks pl_id :=> Const path
+	do
+		let dirPath = cachePath <> "/artists/"
+		let dirPath' = T.pack dirPath
+		(Conduit.sourceDirectory dirPath .|) $
+			Conduit.concatMapMC $ \path -> runMaybeT $ do
+				ar_id <- MaybeT $ pure $ T.stripPrefix dirPath' $ T.pack path
+				guard $ T.all isAlphaNum ar_id
+				pure $ SArtist ar_id :=> Const path
+
+entries :: MonadIO m => FilePath -> m [DSum Source (Const FilePath)]
+entries cachePath = execWriterT $ do
+	do
+		let path = cachePath <> "/user-id"
+		(doesFileExist path >>=) $ bool (pure ()) $ tell $ pure $ SCurrentUser :=> Const path
+	do
+		let dirPath = cachePath <> "/tracks/"
+		(listDirectory dirPath >>=) $ traverse_ $ \tr_id ->
+			when (all isAlphaNum tr_id) $
+				tell $ pure $ STrack (T.pack tr_id) :=> Const (dirPath <> tr_id)
+	do
+		let dirPath = cachePath <> "/albums/"
+		(listDirectory dirPath >>=) $ traverse_ $ \name -> do
+			let name' = T.pack name
+			let (al_id, tracks) = maybe (name', False) (, True) $ T.stripSuffix "-tracks" name'
+			when (T.all isAlphaNum al_id) $
+				tell $ pure $ bool
+					((:=> Const (dirPath <> name)) . SAlbum)
+					((:=> Const (dirPath <> name)) . SAlbumTracks)
+					tracks al_id
+	do
+		let dirPath = cachePath <> "/playlists/"
+		(listDirectory dirPath >>=) $ traverse_ $ \pl_id -> do
+			when (all isAlphaNum pl_id) $
+				tell $ pure $ SPlaylistTracks (T.pack pl_id) :=> Const (dirPath <> pl_id)
+	do
+		let dirPath = cachePath <> "/artists/"
+		(listDirectory dirPath >>=) $ traverse_ $ \ar_id -> do
+			when (all isAlphaNum ar_id) $
+				tell $ pure $ SArtist (T.pack ar_id) :=> Const (dirPath <> ar_id)
