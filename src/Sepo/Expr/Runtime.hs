@@ -2,6 +2,7 @@
 
 module Sepo.Expr.Runtime where
 
+import Control.Applicative
 import Control.Monad (join)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Class (lift)
@@ -9,28 +10,28 @@ import Control.Monad.Trans.Writer.CPS (runWriterT, tell)
 import Data.Aeson (encodeFile, decodeFileStrict)
 import Data.Char (isAlphaNum)
 import Data.Either (partitionEithers)
-import Data.Foldable (find, for_)
+import Data.Foldable (find, for_, toList)
 import Data.List.Split (chunksOf)
 import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Monoid (Any(..))
 import Data.Traversable (for)
 import Prelude hiding (subtract)
-import Sepo.Expr.AST
-import Sepo.Expr.Parser
-import Sepo.Runtime.Values
-import Text.Megaparsec
-import Text.Megaparsec.Char
-import UnliftIO.Directory (createDirectoryIfMissing, doesFileExist)
+import UnliftIO.Directory (createDirectoryIfMissing, doesFileExist, makeAbsolute)
 import UnliftIO.Environment (getEnv)
 import UnliftIO.IORef
+import qualified Control.Monad.Trans.Writer as WriterT
 import qualified DBus.Client as DBus (Client, connectSession)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
-import qualified Control.Monad.Trans.Writer as WriterT
+import qualified Text.Megaparsec as MP
+import qualified Text.Megaparsec.Char as MP
 
+import Sepo.Expr.AST
+import Sepo.Runtime.Values
 import qualified Sepo.DBusClient as DBus
+import qualified Sepo.Expr.Parser as Parser
 import qualified Sepo.Runtime.Filter as Filter
 import qualified Sepo.Runtime.Query as Query
 import qualified Sepo.WebClient as HTTP
@@ -55,11 +56,13 @@ start httpCtx = do
 				txt <- liftIO $ T.readFile aliasesPath
 				let
 					p = fmap M.fromList $ many $
-						(,) <$> f <* ws <* chunk "=" <* ws <*> fmap exprCmd expr <* ws <* single ';' <* ws
-					f = chunk "spotify:playlist:" *> fmap Left (takeWhileP (Just "playlist id") isAlphaNum) <|> chunk "_" *> fmap Right quoted
-				case runParser (fmap fst $ WriterT.runWriterT p) aliasesPath txt of
+						(,) <$> f <* Parser.ws <* MP.chunk "=" <* Parser.ws <*> fmap Parser.exprCmd Parser.expr <* Parser.ws <* MP.single ';' <* Parser.ws
+					f
+						=   MP.chunk "spotify:playlist:" *> fmap Left (MP.takeWhileP (Just "playlist id") isAlphaNum)
+						<|> MP.chunk "_" *> fmap Right Parser.quoted
+				case MP.runParser (fmap fst $ WriterT.runWriterT p) aliasesPath txt of
 					Left err -> do
-						liftIO $ putStrLn $ errorBundlePretty err
+						liftIO $ putStrLn $ MP.errorBundlePretty err
 						newIORef M.empty
 					Right v -> newIORef v
 			False -> do
@@ -95,6 +98,19 @@ executeField ctx Playing = do
 		HTTP.CTPlaylist -> executeField ctx $ PlaylistId $ (!! 2) $ T.splitOn ":" contextURI
 		HTTP.CTAlbum -> executeCmd ctx $ AlbumId $ (!! 2) $ T.splitOn ":" contextURI
 		HTTP.CTArtist -> executeCmd ctx $ ArtistId $ (!! 2) $ T.splitOn ":" contextURI
+executeField ctx (File path) = do
+	txt <- liftIO $ T.readFile path
+	case MP.runParser (WriterT.runWriterT $ Parser.compoundInner <* Parser.ws <* MP.eof) path txt of
+		Left err -> fail $ MP.errorBundlePretty err
+		Right (cmds, comments) -> do
+			mode <- case comments >>= (toList . T.stripPrefix "SEPO:MODE " . MP.stateInput) of
+				[] -> pure Parser.compoundUnion
+				["seq"] -> pure Parser.compoundSequence
+				["union"] -> pure Parser.compoundUnion
+				["intersect"] -> pure Parser.compoundIntersect
+				modes -> fail $ path <> ": too many and/or invalid modes (seq | union | intersect): " <> show modes
+			let cmd = mode cmds
+			executeCmd ctx cmd
 
 executeFieldAssignment :: (Query.MonadFraxl Query.Source m, MonadIO m, MonadFail m) => Context -> Field -> Cmd -> m (Value m)
 executeFieldAssignment ctx (PlaylistId pl_id) cmd = do
@@ -133,8 +149,13 @@ executeFieldAssignment ctx (AliasName name) cmd = do
 			let changed' = changed <> Any (S.member nm nms)
 			tell changed'
 			pure $ if getAny changed' then cmd'' else cmd
-		go nms (Field (FieldAccess f cmds)) = fmap (Field . FieldAccess f) $ traverse (go nms) cmds
+		go nms (Field (FieldAccess f cmds)) = do
+			f' <- case f of
+				File path -> fmap File $ makeAbsolute path
+				f -> pure f
+			fmap (Field . FieldAccess f') $ traverse (go nms) cmds
 		go nms (Seq a b) = Seq <$> go nms a <*> go nms b
+		go nms (RevSeq a b) = RevSeq <$> go nms a <*> go nms b
 		go nms (Concat a b) = Concat <$> go nms a <*> go nms b
 		go nms (Subtract a b) = Subtract <$> go nms a <*> go nms b
 		go nms (Intersect a b) = Intersect <$> go nms a <*> go nms b
@@ -152,6 +173,25 @@ executeFieldAssignment ctx Playing cmd = do
 		Just (ExAlbum al) -> DBus.play (dbusClient ctx) ("spotify:album:" <> albumId al)
 		Just (ExArtist ar) -> DBus.play (dbusClient ctx) ("spotify:artist:" <> artistId ar)
 		Nothing -> fail "TODO: play"
+	pure val
+executeFieldAssignment ctx (File path) cmd = do
+	val <- executeCmd ctx cmd
+	let
+		go (Field (FieldAccess f cmds)) = do
+			f' <- case f of
+				File path -> fmap File $ makeAbsolute path
+				f -> pure f
+			fmap (Field . FieldAccess f') $ traverse go cmds
+		go (Seq a b) = Seq <$> go a <*> go b
+		go (RevSeq a b) = RevSeq <$> go a <*> go b
+		go (Concat a b) = Concat <$> go a <*> go b
+		go (Subtract a b) = Subtract <$> go a <*> go b
+		go (Intersect a b) = Intersect <$> go a <*> go b
+		go (Unique a) = fmap Unique $ go a
+		go (Shuffle a) = fmap Shuffle $ go a
+		go c = pure c
+	cmd' <- go cmd
+	liftIO $ T.writeFile path $ reify minBound cmd'
 	pure val
 
 executeCmd :: (Query.MonadFraxl Query.Source m, MonadIO m, MonadFail m) => Context -> Cmd -> m (Value m)

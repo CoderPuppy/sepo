@@ -1,12 +1,15 @@
 module Sepo.Expr.AST where
 
-import Data.Text
+import Data.Bool (bool)
+import System.FilePath
+import qualified Data.Text as T
 
 data Field
-	= PlaylistId Text
-	| PlaylistName Text
-	| AliasName Text
+	= PlaylistId T.Text
+	| PlaylistName T.Text
+	| AliasName T.Text
 	| Playing
+	| File FilePath
 	deriving (Show)
 
 data FieldAccess = FieldAccess {
@@ -16,9 +19,9 @@ data FieldAccess = FieldAccess {
 
 data Cmd
 	= Field FieldAccess
-	| TrackId Text
-	| AlbumId Text
-	| ArtistId Text
+	| TrackId T.Text
+	| AlbumId T.Text
+	| ArtistId T.Text
 	| PlayingSong
 	| Empty
 	| Seq Cmd Cmd
@@ -53,28 +56,33 @@ assShuffle field = assign field $ Shuffle (Field $ field { fieldAccessAssignment
 
 data Prec = PAssign | PPrefix | PSeq | PPosNeg | PIntersect | PPostfix | PUnit deriving (Eq, Ord, Show, Bounded)
 
-parens :: Bool -> Text -> Text
+parens :: Bool -> T.Text -> T.Text
 parens True t = "(" <> t <> ")"
 parens False t = t
 
 class Reify a where
-	reify :: Prec -> a -> Text
+	reify :: Prec -> a -> T.Text
 
-reifyQuoted :: Text -> Text
+reifyQuoted :: T.Text -> T.Text
 reifyQuoted =
 	("'" <>) .
 	(<> "'") .
-	replace "\n" "\\n" .
-	replace "\r" "\\r" .
-	replace "\t" "\\t" .
-	replace "'" "\\'" .
-	replace "\\" "\\\\"
+	T.replace "\n" "\\n" .
+	T.replace "\r" "\\r" .
+	T.replace "\t" "\\t" .
+	T.replace "'" "\\'" .
+	T.replace "\\" "\\\\"
 
 instance Reify Field where
 	reify d (PlaylistId pl_id) = "spotify:playlist:" <> pl_id
 	reify d (PlaylistName name) = reifyQuoted name
 	reify d (AliasName name) = "_" <> reifyQuoted name
 	reify d Playing = "playing"
+	reify d (File path) = if
+		| Just tail <- T.stripPrefix "/" path' -> "/" <> reifyQuoted tail
+		| Just tail <- T.stripPrefix "./" path' -> "./" <> reifyQuoted tail
+		| otherwise -> "./" <> reifyQuoted path'
+		where path' = T.pack path
 
 instance Reify FieldAccess where
 	reify d (FieldAccess f []) = reify d f
