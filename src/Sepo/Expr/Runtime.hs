@@ -120,8 +120,8 @@ executeFieldAssignment ctx (PlaylistName name) cmd = do
 		Just pl -> pure $ playlistId pl
 		Nothing -> do
 			userId <- Query.dataFetch Query.SCurrentUser
-			pl <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.createPlaylist client userId $ HTTP.CreatePlaylist
-				name Nothing Nothing (Just "created by Sepo")
+			pl <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.createPlaylist client userId $
+				HTTP.CreatePlaylist name Nothing Nothing (Just "created by Sepo")
 			pure $ HTTP.playlistId pl
 	executeFieldAssignment ctx (PlaylistId pl_id) cmd
 executeFieldAssignment ctx (AliasName name) cmd = do

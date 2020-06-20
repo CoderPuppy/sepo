@@ -1,8 +1,10 @@
 module Sepo.WebClient where
 
 import Control.Arrow
+import Control.Concurrent.QSem
 import Control.Monad
 import Control.Monad.IO.Class
+import Control.Monad.IO.Unlift
 import Data.Aeson
 import Data.Maybe
 import Data.Proxy
@@ -14,6 +16,7 @@ import Network.HTTP.Types.Status (status401)
 import Servant.API
 import Servant.Client hiding (Client)
 import UnliftIO.Environment (getEnv)
+import UnliftIO.Exception (bracket_)
 import UnliftIO.IORef
 import UnliftIO.MVar
 import Web.FormUrlEncoded (ToForm(..))
@@ -33,7 +36,8 @@ data Ctx = Ctx {
 	ctxTokenRef :: IORef (MVar T.Text),
 	ctxClientId :: T.Text,
 	ctxClientSecret :: T.Text,
-	ctxRefreshToken :: T.Text
+	ctxRefreshToken :: T.Text,
+	ctxQSem :: QSem
 }
 
 start :: MonadIO m => m Ctx
@@ -46,10 +50,11 @@ start = do
 	ctxClientId <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/client-id"
 	ctxClientSecret <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/client-secret"
 	ctxRefreshToken <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/refresh-token"
+	ctxQSem <- liftIO $ newQSem 4 -- TODO: config
 	pure $ Ctx {..}
 
 run :: MonadIO m => Ctx -> (Client -> ClientM a) -> m (Either ClientError a)
-run ctx m = do
+run ctx m = liftIO $ bracket_ (waitQSem $ ctxQSem ctx) (signalQSem $ ctxQSem ctx) $ do
 	token <- (>>= readMVar) $ readIORef $ ctxTokenRef ctx
 	res <- liftIO $ runClientM (m $ makeClient token) (clientEnv $ ctxMan ctx)
 	case res of
