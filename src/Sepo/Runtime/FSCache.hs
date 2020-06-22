@@ -5,7 +5,6 @@ import Control.Applicative
 import Control.Monad
 import Control.Monad.Fraxl
 import Control.Monad.IO.Class
-import Control.Monad.IO.Unlift
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.Writer
@@ -57,20 +56,20 @@ instance GCompare CacheSource where
 type Cache = DM.DMap CacheSource MVar
 type Ctx = (FilePath, IORef Cache)
 
-run :: MonadUnliftIO m => FilePath -> FreerT CacheSource m a -> m a
+run :: MonadIO m => FilePath -> FreerT CacheSource m a -> m a
 run cachePath f = do
 	cache <- newIORef DM.empty
 	runFraxl (fetch_ (cachePath, cache)) f
 
-fetch :: MonadUnliftIO m => FilePath -> Fetch CacheSource m a
+fetch :: MonadIO m => FilePath -> Fetch CacheSource m a
 fetch cachePath ss = do
 	cache <- newIORef DM.empty
 	fetch_ (cachePath, cache) ss
 
-fetch_ :: MonadUnliftIO m => Ctx -> Fetch CacheSource m a
-fetch_ ctx ss = runConc $ traverseASeq (conc . dispatch ctx) ss
+fetch_ :: MonadIO m => Ctx -> Fetch CacheSource m a
+fetch_ ctx ss = liftIO $ runConc $ traverseASeq (conc . fmap liftIO . dispatch ctx) ss
 
-dispatch :: MonadUnliftIO m => Ctx -> CacheSource a -> m (m a)
+dispatch :: MonadIO m => Ctx -> CacheSource a -> m (m a)
 dispatch (cachePath, cache) (CacheSource s) = case cachePlace s of
 	Just place -> do
 		var <- newEmptyMVar

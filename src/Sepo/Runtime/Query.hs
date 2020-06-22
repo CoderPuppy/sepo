@@ -13,7 +13,6 @@ import Control.Lens.TH (makeLenses)
 import Control.Monad
 import Control.Monad.Fraxl
 import Control.Monad.IO.Class
-import Control.Monad.IO.Unlift
 import Control.Monad.State.Class (modify)
 import Control.Monad.Trans.Class
 import Control.Monad.Trans.Fraxl.Free
@@ -114,10 +113,10 @@ start ctxCachePath = do
 	ctxHTTP <- HTTP.start
 	pure $ Ctx {..}
 
-cacheGet :: MonadUnliftIO m => Ctx -> Source a -> m (Maybe a)
+cacheGet :: MonadIO m => Ctx -> Source a -> m (Maybe a)
 cacheGet ctx s = (readIORef (ctxUseFSCache ctx) >>=) $ bool (pure Nothing) $ runFraxl (FSCache.fetch_ (ctxCachePath ctx, ctxFSCache ctx)) $  dataFetch $ FSCache.CacheSource s
 
-finalize :: forall m a. MonadUnliftIO m => Ctx -> MVar a -> Source a -> a -> Bool -> m ()
+finalize :: forall m a. MonadIO m => Ctx -> MVar a -> Source a -> a -> Bool -> m ()
 finalize ctx var s res cached = do
 	putMVar var res
 	others <- DM.traverseWithKey (const $ newMVar . runIdentity) (srcAll s res)
@@ -125,13 +124,13 @@ finalize ctx var s res cached = do
 	when (not cached) $ do
 		cache <- readIORef $ ctxCache ctx
 		let
-			put :: forall b. Bool -> Source b -> b -> m ()
+			put :: forall b. Bool -> Source b -> b -> IO ()
 			put = FSCache.put (ctxCachePath ctx, ctxFSCache ctx) (\s -> traverse readMVar $ DM.lookup s cache)
-		runConc $
+		liftIO $ runConc $
 			(conc (put True s res) *>) $
 			DM.forWithKey_ others' $ \s' v' -> conc $ put False s' =<< readMVar v'
 
-fetch :: (MonadUnliftIO m, MonadFail m) => Ctx -> Fetch Source m a
+fetch :: (MonadIO m, MonadFail m) => Ctx -> Fetch Source m a
 fetch ctx ss = do
 	cache <- readIORef $ ctxCache ctx
 	-- this is prefetched to allow batching and to be used for later SAlbumTracks
@@ -222,14 +221,14 @@ fetch ctx ss = do
 						finalize ctx var (SArtist aid) (httpArtistS artist) False
 				) $
 				Conduit.sinkNull
-	prep <- traverseASeq (fmap conc . dispatch ctx) ss
-	runConc $
+	prep <- traverseASeq (fmap conc . liftIO . dispatch ctx) ss
+	liftIO $ runConc $
 		(conc albums *>) $
 		(conc tracks *>) $
 		(conc artists *>) $
 		traverseASeq (fmap pure) prep
 
-exec :: (MonadUnliftIO m, MonadFail m) => Ctx -> Source a -> m (m (), m a)
+exec :: (MonadIO m, MonadFail m) => Ctx -> Source a -> m (m (), m a)
 exec ctx SCurrentUser = pure $ (pure (),) $ fmap HTTP.userId $ HTTP.run_ (ctxHTTP ctx) HTTP.getUser
 exec ctx SCurrentUserPlaylists = pure $ (pure (),) $ fmap (fmap httpPlaylistS) $
 	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getPlaylists client
@@ -281,7 +280,7 @@ exec ctx (SArtist aid) = fail "BROKEN: SArtist should be prefetched"
 exec ctx (SArtistAlbums aid) = pure $ (pure (),) $ fmap (fmap httpAlbumS) $
 	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getArtistAlbums client aid
 
-dispatch :: forall m a. (MonadUnliftIO m, MonadFail m) => Ctx -> Source a -> m (m a)
+dispatch :: forall m a. (MonadIO m, MonadFail m) => Ctx -> Source a -> m (m a)
 dispatch ctx s = fmap (DM.lookup s) (readIORef $ ctxCache ctx) >>= \case
 	Just var -> pure $ readMVar var
 	Nothing -> do
@@ -296,5 +295,5 @@ dispatch ctx s = fmap (DM.lookup s) (readIORef $ ctxCache ctx) >>= \case
 			finalize ctx var s res cached
 			pure res
 
-run :: (MonadUnliftIO m, MonadFail m) => Ctx -> FreerT Source m a -> m a
+run :: (MonadIO m, MonadFail m) => Ctx -> FreerT Source m a -> m a
 run ctx = runFraxl $ fetch ctx
