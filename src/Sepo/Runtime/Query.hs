@@ -1,7 +1,7 @@
 {-# LANGUAGE TemplateHaskell, FlexibleContexts, BlockArguments #-}
 
 module Sepo.Runtime.Query (
-	Ctx(..), start, run, Source(..),
+	Ctx(..), start, run, Source(..), Action(..), apply, put, evict,
 	MonadFraxl(dataFetch), FreerT
 ) where
 
@@ -129,6 +129,15 @@ finalize ctx var s res cached = do
 		liftIO $ runConc $
 			(conc (put True s res) *>) $
 			DM.forWithKey_ others' $ \s' v' -> conc $ put False s' =<< readMVar v'
+
+put :: MonadIO m => Ctx -> Source a -> a -> m ()
+put ctx s v = do
+	var <- newEmptyMVar
+	modifyIORef (ctxCache ctx) $ DM.insert s var
+	finalize ctx var s v False
+
+evict :: MonadIO m => Ctx -> Source a -> m ()
+evict ctx s = modifyIORef (ctxCache ctx) $ DM.delete s
 
 fetch :: (MonadIO m, MonadFail m) => Ctx -> Fetch Source m a
 fetch ctx ss = do
@@ -297,3 +306,29 @@ dispatch ctx s = fmap (DM.lookup s) (readIORef $ ctxCache ctx) >>= \case
 
 run :: (MonadIO m, MonadFail m) => Ctx -> FreerT Source m a -> m a
 run ctx = runFraxl $ fetch ctx
+
+apply :: (MonadIO m, MonadFail m) => Ctx -> Action a -> m a
+apply ctx (APlaylistCreate info) = do
+	userId <- run ctx $ dataFetch SCurrentUser
+	pl <- fmap httpPlaylist $ HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.createPlaylist client userId info
+	put ctx (SPlaylist $ playlistId pl) pl
+	put ctx (SPlaylistTracks $ playlistId pl) []
+	pure pl
+apply ctx (APlaylistReplace pid tracks) = do
+	pl <- run ctx $ dataFetch $ SPlaylist pid
+	snapshotId <- fmap HTTP.snapshotRespId $ HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.replaceTracks client pid $
+		HTTP.ReplaceTracks $ fmap (("spotify:track:" <>) . trackId) tracks
+	pl <- pure $ pl { playlistSnapshotId = snapshotId }
+	put ctx (SPlaylist $ playlistId pl) pl
+	-- TODO: can this be a put
+	evict ctx $ SPlaylistTracks $ playlistId pl
+	pure pl
+apply ctx (APlaylistAdd pid place tracks) = do
+	pl <- run ctx $ dataFetch $ SPlaylist pid
+	snapshotId <- fmap HTTP.snapshotRespId $ HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.addTracks client pid $
+		HTTP.AddTracks (fmap (("spotify:track:" <>) . trackId) tracks) place
+	pl <- pure $ pl { playlistSnapshotId = snapshotId }
+	put ctx (SPlaylist $ playlistId pl) pl
+	-- TODO: can this be a put
+	evict ctx $ SPlaylistTracks $ playlistId pl
+	pure pl

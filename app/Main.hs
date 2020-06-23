@@ -54,7 +54,7 @@ runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 			liftIO exitFailure
 		Right cmd -> pure cmd
 	liftIO $ T.putStrLn $ Expr.reify Expr.PSeq cmd
-	exprCtx <- Expr.start $ Query.ctxHTTP queryCtx
+	exprCtx <- Expr.start queryCtx
 	val <- Expr.executeCmd exprCtx cmd
 	tracks <- force $ tracks val
 	liftIO $ putStrLn $ case tracks of

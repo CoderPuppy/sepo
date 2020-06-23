@@ -192,6 +192,11 @@ instance GCompare Source where
 	-- SArtistAlbums _ `gcompare` _ = GLT
 	-- a `gcompare` b = error $ show (a, b)
 
+data Action a where
+	APlaylistCreate :: HTTP.CreatePlaylist -> Action Playlist
+	APlaylistReplace :: T.Text -> [Track] -> Action Playlist
+	APlaylistAdd :: T.Text -> Maybe Int -> [Track] -> Action Playlist
+
 tracksList :: Tracks -> [Track]
 tracksList (Ordered tracks) = tracks
 tracksList (Unordered tracks) = msToL tracks

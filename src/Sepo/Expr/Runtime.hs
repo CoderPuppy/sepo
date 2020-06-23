@@ -37,14 +37,14 @@ import qualified Sepo.Runtime.Query as Query
 import qualified Sepo.WebClient as HTTP
 
 data Context = Context {
-	httpCtx :: HTTP.Ctx,
+	queryCtx :: Query.Ctx,
 	dbusClient :: DBus.Client,
 	aliasesPath :: FilePath,
 	aliases :: IORef (M.Map (Either T.Text T.Text) Cmd)
 }
 
-start :: (Query.MonadFraxl Source m, MonadIO m) => HTTP.Ctx -> m Context
-start httpCtx = do
+start :: (Query.MonadFraxl Source m, MonadIO m) => Query.Ctx -> m Context
+start queryCtx = do
 	dbusClient <- liftIO DBus.connectSession
 	home <- getEnv "HOME"
 	Query.dataFetch SCurrentUser
@@ -115,30 +115,23 @@ executeField ctx (File path) = do
 executeFieldAssignment :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Field -> Cmd -> m (Value m)
 executeFieldAssignment ctx (PlaylistId pl_id) cmd = do
 	val <- executeCmd ctx cmd
-	playlist <- Query.dataFetch $ SPlaylist pl_id
 	tracks <- force $ tracks val
 	let chunks = chunksOf 100 $ tracksList tracks
-	snapshotId <- fmap HTTP.snapshotRespId $
-		HTTP.run_ (httpCtx ctx) $ \client -> HTTP.replaceTracks client pl_id $ HTTP.ReplaceTracks $
-		fmap (("spotify:track:" <>) . trackId) $ fromMaybe [] $ listToMaybe chunks
-	let addTracks chunk = fmap HTTP.snapshotRespId $
-		HTTP.run_ (httpCtx ctx) $ \client -> HTTP.addTracks client pl_id $ HTTP.AddTracks
-			(fmap (("spotify:track:" <>) . trackId) chunk) Nothing
-	snapshotId <- foldl ((. addTracks) . (*>)) (pure snapshotId) (drop 1 chunks)
+	playlist <- Query.apply (queryCtx ctx) $ APlaylistReplace pl_id $ fromMaybe [] $ listToMaybe chunks
+	let addTracks chunk = Query.apply (queryCtx ctx) $ APlaylistAdd pl_id Nothing chunk
+	playlist <- foldl ((. addTracks) . (*>)) (pure playlist) (drop 1 chunks)
 	liftIO $ T.appendFile (aliasesPath ctx) $ "spotify:playlist:" <> pl_id <> " = " <> reify minBound cmd <> ";\n"
 	modifyIORef (aliases ctx) $ M.insert (Left pl_id) cmd
 	pure $ Value {
 		tracks = pure tracks,
-		existing = Just $ ExPlaylist $ playlist { playlistSnapshotId = snapshotId }
+		existing = Just $ ExPlaylist playlist
 	}
 executeFieldAssignment ctx (PlaylistName name) cmd = do
 	pl_id <- findPlaylist ctx name >>= \case
 		Just pl -> pure $ playlistId pl
-		Nothing -> do
-			userId <- Query.dataFetch SCurrentUser
-			pl <- HTTP.run_ (httpCtx ctx) $ \client -> HTTP.createPlaylist client userId $
+		Nothing -> fmap playlistId $
+			Query.apply (queryCtx ctx) $ APlaylistCreate $
 				HTTP.CreatePlaylist name Nothing Nothing (Just "created by Sepo")
-			pure $ HTTP.playlistId pl
 	executeFieldAssignment ctx (PlaylistId pl_id) cmd
 executeFieldAssignment ctx (AliasName name) cmd = do
 	val <- executeCmd ctx cmd
