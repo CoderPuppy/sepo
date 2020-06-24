@@ -33,6 +33,16 @@ import qualified Sepo.Expr.Runtime as Expr
 import qualified Sepo.Runtime.FSCache as FSCache
 import qualified Sepo.Runtime.Query as Query
 
+data OutputFormat = OFSimple Bool | OFFile Bool | OFJSON deriving (Show)
+readOutputFormat :: Args.ReadM OutputFormat
+readOutputFormat = Args.maybeReader $ \case
+	"simple"  -> Just $ OFSimple False
+	"simple+" -> Just $ OFSimple True
+	"file"  -> Just $ OFFile False
+	"file+" -> Just $ OFFile True
+	"json" -> Just OFJSON
+	_ -> Nothing
+
 data Options = Options {}
 data Command
 	= CEval EvalOpts
@@ -40,7 +50,7 @@ data Command
 	deriving (Show)
 data EvalOpts = EvalOpts {
 	evalTxt :: T.Text,
-	evalJSON :: Bool
+	evalFormat :: OutputFormat
 } deriving (Show)
 data FetchOpts = FetchOpts {
 	fetchUserPlaylists :: Bool,
@@ -57,21 +67,18 @@ runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 			liftIO $ hPutStr stderr $ errorBundlePretty err
 			liftIO exitFailure
 		Right cmd -> pure cmd
-	when (not evalJSON) $ do
-		liftIO $ T.putStrLn $ Expr.reify minBound cmd
+	case evalFormat of
+		OFSimple _ -> liftIO $ T.putStrLn $ Expr.reify minBound cmd
+		OFFile _ -> liftIO $ T.putStrLn $ "# " <> Expr.reify minBound cmd
+		OFJSON -> pure ()
 	exprCtx <- Expr.start queryCtx
 	val <- Expr.executeCmd exprCtx cmd
 	tracks <- force $ tracks val
-	if evalJSON
-	then liftIO $ BSL.putStrLn $ Aeson.encodingToLazyByteString $ Aeson.pairs $ mconcat [
-			Aeson.pair "command" $ Aeson.toEncoding $ Expr.reify minBound cmd,
-			Aeson.pair "tracks" $ Aeson.toEncoding tracks,
-			Aeson.pair "existing" $ Aeson.toEncoding $ existing val
-		]
-	else
+	case evalFormat of
 		-- TODO: lifting this block as a whole seems to be necessary to ensure proper order of message
 		-- this means something is very broken, probably in Fraxl
-		liftIO $ do
+		-- also see below
+		OFSimple full -> liftIO $ do
 			putStrLn $ case tracks of
 				Ordered _ -> "ordered"
 				Unordered _ -> "unordered"
@@ -84,10 +91,41 @@ runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 					" by ", formatList "no-one" $ fmap artistName $ trackArtists track,
 					" from ", albumName $ trackAlbum track,
 					" (spotify:track:", trackId track,
-					" by ", formatList "no-one" $ fmap (("spotify:artist:" <>) . artistId) $ trackArtists track,
-					" from spotify:album:", albumId $ trackAlbum track,
+					if full
+					then mconcat [
+							" by ", formatList "no-one" $ fmap (("spotify:artist:" <>) . artistId) $ trackArtists track,
+							" from spotify:album:", albumId $ trackAlbum track
+						]
+					else "",
 					")"
 				]
+		-- TODO: see above
+		OFFile full -> liftIO $ do
+			putStrLn $ case tracks of
+				Ordered _ -> "# ordered"
+				Unordered _ -> "# unordered"
+			maybe (pure ()) T.putStrLn $ flip fmap (existing val) $ \case
+				ExArtist ar -> "# artist " <> artistName ar <> " (spotify:artist:" <> artistId ar <> ")"
+				ExAlbum al -> "# album " <> albumName al <> " featuring " <> formatList "no-one" (fmap artistName $ albumArtists al) <> " (spotify:album:" <> albumId al <> ")"
+				ExPlaylist pl -> "# playlist " <> playlistName pl <> " (spotify:playlist:" <> playlistId pl <> ")"
+			for_ (tracksList tracks) $ \track -> T.putStrLn $ mconcat [
+					"spotify:track:", trackId track,
+					" # ", trackName track,
+					" by ", formatList "no-one" $ fmap artistName $ trackArtists track,
+					" from ", albumName $ trackAlbum track,
+					if full
+					then mconcat [
+							" (by ", formatList "no-one" $ fmap (("spotify:artist:" <>) . artistId) $ trackArtists track,
+							" from spotify:album:", albumId $ trackAlbum track,
+							")"
+						]
+					else ""
+				]
+		OFJSON -> liftIO $ BSL.putStrLn $ Aeson.encodingToLazyByteString $ Aeson.pairs $ mconcat [
+				Aeson.pair "command" $ Aeson.toEncoding $ Expr.reify minBound cmd,
+				Aeson.pair "tracks" $ Aeson.toEncoding tracks,
+				Aeson.pair "existing" $ Aeson.toEncoding $ existing val
+			]
 runCmd opts queryCtx (CFetch (FetchOpts {..})) = do
 	ops <- pure []
 	ops <- fmap (++ ops) $ flip (bool (pure [])) fetchUserPlaylists $ do
@@ -123,9 +161,7 @@ args = flip Args.info
 				mempty
 				$ fmap CEval $ EvalOpts
 					<$> (fmap (T.intercalate " ") $ some $ Args.argument Args.str (Args.metavar "EXPR" <> Args.help "expression to evaluate"))
-					<*> (fmap (foldl (const id) False) $ many
-						$   Args.flag' False (Args.long "no-json")
-						<|> Args.flag' True (Args.long "json" <> Args.help "output in JSON"))
+					<*> ((<|> pure (OFSimple False)) $ Args.option readOutputFormat (Args.long "format" <> Args.metavar "FORMAT" <> Args.help "format to output in, valid options: simple[+], file[+], json"))
 			tell $ Args.command "fetch" $ flip Args.info
 				mempty
 				$ fmap CFetch $ FetchOpts
