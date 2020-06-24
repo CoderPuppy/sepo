@@ -16,6 +16,7 @@ import Data.Maybe (fromMaybe, listToMaybe)
 import Data.Monoid (Any(..))
 import Data.Traversable (for)
 import Prelude hiding (subtract)
+import System.IO (stderr, hPutStrLn)
 import UnliftIO.Directory (createDirectoryIfMissing, doesFileExist, makeAbsolute)
 import UnliftIO.Environment (getEnv)
 import UnliftIO.IORef
@@ -62,7 +63,7 @@ start queryCtx = do
 						<|> MP.chunk "_" *> fmap Right Parser.quoted
 				case MP.runParser (fmap fst $ WriterT.runWriterT p) aliasesPath txt of
 					Left err -> do
-						liftIO $ putStrLn $ MP.errorBundlePretty err
+						liftIO $ hPutStrLn stderr $ MP.errorBundlePretty err
 						newIORef M.empty
 					Right v -> newIORef v
 			False -> do

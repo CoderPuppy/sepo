@@ -12,7 +12,7 @@ import Data.Foldable
 import Data.List (intercalate)
 import Data.String
 import System.Exit (exitFailure)
-import System.IO (stderr)
+import System.IO (stderr, hPutStr, hPutStrLn)
 import Text.Megaparsec (runParser, eof, errorBundlePretty)
 import UnliftIO.Environment (getArgs, getEnv)
 import UnliftIO.IORef
@@ -53,8 +53,8 @@ runCmd :: Options -> Query.Ctx -> Command -> M ()
 runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 	cmd <- case runParser (fmap fst $ runWriterT $ fmap Expr.exprCmd Expr.expr <* eof) "cmdline" evalTxt of
 		Left err -> do
-			liftIO $ putStrLn "Parse error"
-			liftIO $ putStr $ errorBundlePretty err
+			liftIO $ hPutStrLn stderr "Parse error"
+			liftIO $ hPutStr stderr $ errorBundlePretty err
 			liftIO exitFailure
 		Right cmd -> pure cmd
 	when (not evalJSON) $ do
@@ -102,12 +102,7 @@ runCmd opts queryCtx (CFetch (FetchOpts {..})) = do
 	ops <- fmap (++ ops) $ flip (bool (pure [])) fetchExisting $ do
 		liftIO $ putStrLn "refetching cached"
 		useFSCache <- liftIO $ atomicModifyIORef (Query.ctxUseFSCache queryCtx) $ const False &&& id
-		-- Conduit.runConduit $
-		-- 	(FSCache.entries (Query.ctxCachePath queryCtx) .|) $
-		-- 	Conduit.mapM_C $ \(src :=> path) -> do
-		-- 		void $ Query.dataFetch src
 		entries <- FSCache.entries (Query.ctxCachePath queryCtx)
-		-- liftIO $ putStrLn $ intercalate ", " $ fmap (\(src :=> path) -> show (src, path)) $ entries
 		pure $ pure (
 				for_ entries $ \(src :=> path) -> do
 					void $ Query.dataFetch src

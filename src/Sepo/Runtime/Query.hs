@@ -263,7 +263,6 @@ exec ctx (SPlaylistTracks pid) = do
 		runMaybeT $ do
 			atomicModifyIORef (ctxPlaylistTracksCache ctx) $ (, ()) . M.delete pid
 			paging <- MaybeT $ pure paging
-			liftIO $ print "here"
 			paging <- takeMVar paging
 			HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPagedContinue (HTTP.getPlaylistTracks client pid) paging
 exec ctx SCurrentlyPlaying = pure $ (pure (),) $
