@@ -17,6 +17,7 @@ import Network.HTTP.Client.TLS (newTlsManager)
 import Network.HTTP.Types.Status
 import Servant.API
 import Servant.Client hiding (Client)
+import System.IO (stderr, hPutStrLn)
 import Text.Read (readMaybe)
 import UnliftIO.Concurrent (threadDelay)
 import UnliftIO.Environment (getEnv)
@@ -111,7 +112,7 @@ run ctx m = liftIO $
 				res <- liftIO $ runClientM (m $ makeClient token) (clientEnv $ ctxMan ctx)
 				case res of
 					Left (FailureResponse req res) | responseStatusCode res == unauthorized401 -> do
-						liftIO $ putStrLn $ "refreshing access token because a response failed with status 401: " <> show res
+						liftIO $ hPutStrLn stderr $ "refreshing access token because a response failed with status 401: " <> show res
 						refreshAccessToken ctx >>= \case
 							Left err -> pure $ Left err
 							Right () -> run ctx m
