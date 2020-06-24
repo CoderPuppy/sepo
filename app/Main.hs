@@ -5,6 +5,7 @@ import Control.Applicative
 import Control.Arrow
 import Control.Monad
 import Control.Monad.IO.Class
+import Control.Monad.Trans.Except
 import Control.Monad.Trans.Writer
 import Data.Bool (bool)
 import Data.Dependent.Sum
@@ -12,7 +13,7 @@ import Data.Foldable
 import Data.List (intercalate)
 import Data.String
 import System.Exit (exitFailure)
-import System.IO (stderr, hPutStr, hPutStrLn)
+import System.IO (stderr, hPutStr, hPutStrLn, stdin)
 import Text.Megaparsec (runParser, eof, errorBundlePretty)
 import UnliftIO.Environment (getArgs, getEnv)
 import UnliftIO.IORef
@@ -53,7 +54,7 @@ data Command
 	deriving (Show)
 data EvalOpts = EvalOpts {
 	evalFormat :: OutputFormat,
-	evalTxt :: T.Text
+	evalSrc :: Maybe T.Text -- Nothing → stdin
 } deriving (Show)
 data FetchOpts = FetchOpts {
 	fetchUserPlaylists :: Bool,
@@ -64,7 +65,13 @@ type M = Query.FreerT Query.Source (Conduit.ResourceT IO)
 
 runCmd :: Options -> Query.Ctx -> Command -> M ()
 runCmd opts queryCtx (CEval (EvalOpts {..})) = do
-	cmd <- case runParser (fmap fst $ runWriterT $ fmap Expr.exprCmd Expr.expr <* eof) "cmdline" evalTxt of
+	cmd <- runExceptT $ case evalSrc of
+		Just src -> fmap fst $ ExceptT $ pure $ runParser (runWriterT $ fmap Expr.exprCmd Expr.expr <* eof) "cmdline" src
+		Nothing -> do
+			src <- liftIO $ T.hGetContents stdin
+			(cmds, comments) <- ExceptT $ pure $ runParser (runWriterT $ Expr.compoundInner <* Expr.ws <* eof) "stdin" src
+			Expr.handleMode (cmds, comments)
+	cmd <- case cmd of
 		Left err -> do
 			liftIO $ hPutStrLn stderr "Parse error"
 			liftIO $ hPutStr stderr $ errorBundlePretty err
@@ -172,7 +179,9 @@ args = flip Args.info
 				mempty
 				$ fmap CEval $ EvalOpts
 					<$> ((<|> pure (OFSimple True False)) $ Args.option readOutputFormat (Args.long "format" <> Args.metavar "FORMAT" <> Args.help "format to output in, valid options: simple[-][+], file[+], json"))
-					<*> (fmap (T.intercalate " ") $ some $ Args.argument Args.str (Args.metavar "EXPR" <> Args.help "expression to evaluate"))
+					<*>
+						(   (fmap (Just . T.intercalate " ") $ some $ Args.argument Args.str (Args.metavar "EXPR" <> Args.help "expression to evaluate"))
+						<|> Args.flag' Nothing (Args.long "stdin" <> Args.help "read expression from standard in"))
 			tell $ Args.command "fetch" $ flip Args.info
 				mempty
 				$ fmap CFetch $ FetchOpts

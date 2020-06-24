@@ -104,15 +104,7 @@ executeField ctx (File path) = do
 	txt <- liftIO $ T.readFile path
 	case MP.runParser (WriterT.runWriterT $ Parser.compoundInner <* Parser.ws <* MP.eof) path txt of
 		Left err -> fail $ MP.errorBundlePretty err
-		Right (cmds, comments) -> do
-			mode <- case comments >>= (toList . T.stripPrefix "SEPO:MODE " . MP.stateInput) of
-				[] -> pure Parser.compoundUnion
-				["seq"] -> pure Parser.compoundSequence
-				["union"] -> pure Parser.compoundUnion
-				["intersect"] -> pure Parser.compoundIntersect
-				modes -> fail $ path <> ": too many and/or invalid modes (seq | union | intersect): " <> show modes
-			let cmd = mode cmds
-			executeCmd ctx cmd
+		Right (cmds, comments) -> Parser.handleMode (cmds, comments) >>= executeCmd ctx
 
 executeFieldAssignment :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Field -> Cmd -> m (Value m)
 executeFieldAssignment ctx (PlaylistId pl_id) cmd = do

@@ -293,3 +293,15 @@ exprPrecs = scanl (flip ($))
 
 expr :: Parser Expr
 expr = head $ reverse exprPrecs
+
+findMode :: MonadFail m => [T.Text] -> m ([(Bool, Cmd)] -> Cmd)
+findMode comments = case comments >>= (toList . T.stripPrefix "SEPO:MODE ") of
+	[] -> pure compoundUnion
+	["seq"] -> pure compoundSequence
+	["sequence"] -> pure compoundSequence
+	["union"] -> pure compoundUnion
+	["intersect"] -> pure compoundIntersect
+	modes -> fail $ "too many and/or invalid modes (seq | union | intersect): " <> show modes
+
+handleMode :: MonadFail m => ([(Bool, Cmd)], [State T.Text Void]) -> m Cmd
+handleMode (cmds, comments) = fmap ($ cmds) $ findMode $ fmap stateInput comments
