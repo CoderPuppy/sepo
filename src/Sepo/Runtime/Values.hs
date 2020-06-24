@@ -11,8 +11,11 @@ import Data.List (stripPrefix)
 import Data.Maybe (fromJust)
 import Data.Time.Clock (UTCTime)
 import Data.Type.Equality ((:~:)(Refl))
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Encoding as AesonEnc
 import qualified Data.Map as M
 import qualified Data.Text as T
+import qualified Data.Vector as V
 
 import qualified Sepo.WebClient as HTTP
 
@@ -25,6 +28,10 @@ data Playlist = Playlist {
 	playlistName :: T.Text,
 	playlistSnapshotId :: T.Text
 } deriving (Eq, Ord, Show)
+$(deriveJSON defaultOptions {
+	fieldLabelModifier = fmap toLower . fromJust . stripPrefix "playlist",
+	sumEncoding = UntaggedValue
+} 'Playlist)
 
 data Artist = Artist {
 	artistId :: T.Text,
@@ -58,8 +65,26 @@ $(deriveJSON defaultOptions {
 } 'Track)
 
 data Tracks = Ordered [Track] | Unordered (MultiSet Track) deriving (Show)
+instance Aeson.ToJSON Tracks where
+	toJSON (Ordered tracks) = Aeson.Array $ V.fromList $ fmap Aeson.toJSON tracks
+	toJSON (Unordered tracks) = Aeson.object $ fmap go $ M.toList tracks
+		where go (track, count) = (trackId track, Aeson.object [
+				("track", Aeson.toJSON track),
+				("count", Aeson.toJSON count)
+			])
+	toEncoding (Ordered tracks) = AesonEnc.list Aeson.toEncoding tracks
+	toEncoding (Unordered tracks) = AesonEnc.dict AesonEnc.text id (foldl . go) $ M.toList tracks
+		where go f acc (track, count) = f (trackId track)
+			(AesonEnc.dict AesonEnc.text id
+				(\f acc () ->
+					f "track" (Aeson.toEncoding track) $
+					f "count" (Aeson.toEncoding count) $
+					acc)
+				())
+			acc
 
 data Existing = ExPlaylist Playlist | ExAlbum Album | ExArtist Artist deriving (Show)
+$(deriveJSON defaultOptions ''Existing)
 data Value m = Value {
 	tracks :: Thunk m Tracks,
 	existing :: Maybe Existing

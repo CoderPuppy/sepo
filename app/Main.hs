@@ -17,6 +17,9 @@ import Text.Megaparsec (runParser, eof, errorBundlePretty)
 import UnliftIO.Environment (getArgs, getEnv)
 import UnliftIO.IORef
 import qualified Conduit as Conduit
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Encoding as Aeson
+import qualified Data.ByteString.Lazy.Char8 as BSL
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import qualified Data.Text.Lazy as TL
@@ -36,7 +39,8 @@ data Command
 	| CFetch FetchOpts
 	deriving (Show)
 data EvalOpts = EvalOpts {
-	evalTxt :: T.Text
+	evalTxt :: T.Text,
+	evalJSON :: Bool
 } deriving (Show)
 data FetchOpts = FetchOpts {
 	fetchUserPlaylists :: Bool,
@@ -53,26 +57,37 @@ runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 			liftIO $ putStr $ errorBundlePretty err
 			liftIO exitFailure
 		Right cmd -> pure cmd
-	liftIO $ T.putStrLn $ Expr.reify Expr.PSeq cmd
+	when (not evalJSON) $ do
+		liftIO $ T.putStrLn $ Expr.reify minBound cmd
 	exprCtx <- Expr.start queryCtx
 	val <- Expr.executeCmd exprCtx cmd
 	tracks <- force $ tracks val
-	liftIO $ putStrLn $ case tracks of
-		Ordered _ -> "ordered"
-		Unordered _ -> "unordered"
-	maybe (pure ()) (liftIO . T.putStrLn) $ flip fmap (existing val) $ \case
-		ExArtist ar -> "artist " <> artistName ar <> " (spotify:artist:" <> artistId ar <> ")"
-		ExAlbum al -> "album " <> albumName al <> " featuring " <> formatList "no-one" (fmap artistName $ albumArtists al) <> " (spotify:album:" <> albumId al <> ")"
-		ExPlaylist pl -> "playlist " <> playlistName pl <> " (spotify:playlist:" <> playlistId pl <> ")"
-	for_ (tracksList tracks) $ \track -> liftIO $ T.putStrLn $ mconcat [
-			trackName track,
-			" by ", formatList "no-one" $ fmap artistName $ trackArtists track,
-			" from ", albumName $ trackAlbum track,
-			" (spotify:track:", trackId track,
-			" by ", formatList "no-one" $ fmap (("spotify:artist:" <>) . artistId) $ trackArtists track,
-			" from spotify:album:", albumId $ trackAlbum track,
-			")"
+	if evalJSON
+	then liftIO $ BSL.putStrLn $ Aeson.encodingToLazyByteString $ Aeson.pairs $ mconcat [
+			Aeson.pair "command" $ Aeson.toEncoding $ Expr.reify minBound cmd,
+			Aeson.pair "tracks" $ Aeson.toEncoding tracks,
+			Aeson.pair "existing" $ Aeson.toEncoding $ existing val
 		]
+	else
+		-- TODO: lifting this block as a whole seems to be necessary to ensure proper order of message
+		-- this means something is very broken, probably in Fraxl
+		liftIO $ do
+			putStrLn $ case tracks of
+				Ordered _ -> "ordered"
+				Unordered _ -> "unordered"
+			maybe (pure ()) T.putStrLn $ flip fmap (existing val) $ \case
+				ExArtist ar -> "artist " <> artistName ar <> " (spotify:artist:" <> artistId ar <> ")"
+				ExAlbum al -> "album " <> albumName al <> " featuring " <> formatList "no-one" (fmap artistName $ albumArtists al) <> " (spotify:album:" <> albumId al <> ")"
+				ExPlaylist pl -> "playlist " <> playlistName pl <> " (spotify:playlist:" <> playlistId pl <> ")"
+			for_ (tracksList tracks) $ \track -> T.putStrLn $ mconcat [
+					trackName track,
+					" by ", formatList "no-one" $ fmap artistName $ trackArtists track,
+					" from ", albumName $ trackAlbum track,
+					" (spotify:track:", trackId track,
+					" by ", formatList "no-one" $ fmap (("spotify:artist:" <>) . artistId) $ trackArtists track,
+					" from spotify:album:", albumId $ trackAlbum track,
+					")"
+				]
 runCmd opts queryCtx (CFetch (FetchOpts {..})) = do
 	ops <- pure []
 	ops <- fmap (++ ops) $ flip (bool (pure [])) fetchUserPlaylists $ do
@@ -113,15 +128,18 @@ args = flip Args.info
 				mempty
 				$ fmap CEval $ EvalOpts
 					<$> (fmap (T.intercalate " ") $ some $ Args.argument Args.str (Args.metavar "EXPR" <> Args.help "expression to evaluate"))
+					<*> (fmap (foldl (const id) False) $ many
+						$   Args.flag' False (Args.long "no-json")
+						<|> Args.flag' True (Args.long "json" <> Args.help "output in JSON"))
 			tell $ Args.command "fetch" $ flip Args.info
 				mempty
 				$ fmap CFetch $ FetchOpts
 					<$> (fmap (foldl (const id) True) $ many
-							$   Args.flag' False (Args.long "no-user-playlists" <> Args.help "do not fetch the user's playlists")
-							<|> Args.flag' True (Args.long "user-playlists"))
+						$   Args.flag' False (Args.long "no-user-playlists" <> Args.help "do not fetch the user's playlists")
+						<|> Args.flag' True (Args.long "user-playlists"))
 					<*> (fmap (foldl (const id) False) $ many
-							$   Args.flag' False (Args.long "no-existing")
-							<|> Args.flag' True (Args.long "existing" <> Args.help "refetch everything existing in the cache"))
+						$   Args.flag' False (Args.long "no-existing")
+						<|> Args.flag' True (Args.long "existing" <> Args.help "refetch everything existing in the cache"))
 		))
 
 main :: IO ()
