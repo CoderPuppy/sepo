@@ -52,8 +52,8 @@ data Command
 	| CFetch FetchOpts
 	deriving (Show)
 data EvalOpts = EvalOpts {
-	evalTxt :: T.Text,
-	evalFormat :: OutputFormat
+	evalFormat :: OutputFormat,
+	evalTxt :: T.Text
 } deriving (Show)
 data FetchOpts = FetchOpts {
 	fetchUserPlaylists :: Bool,
@@ -164,8 +164,8 @@ args = flip Args.info
 			tell $ Args.command "eval" $ flip Args.info
 				mempty
 				$ fmap CEval $ EvalOpts
-					<$> (fmap (T.intercalate " ") $ some $ Args.argument Args.str (Args.metavar "EXPR" <> Args.help "expression to evaluate"))
-					<*> ((<|> pure (OFSimple True False)) $ Args.option readOutputFormat (Args.long "format" <> Args.metavar "FORMAT" <> Args.help "format to output in, valid options: simple[-][+], file[+], json"))
+					<$> ((<|> pure (OFSimple True False)) $ Args.option readOutputFormat (Args.long "format" <> Args.metavar "FORMAT" <> Args.help "format to output in, valid options: simple[-][+], file[+], json"))
+					<*> (fmap (T.intercalate " ") $ some $ Args.argument Args.str (Args.metavar "EXPR" <> Args.help "expression to evaluate"))
 			tell $ Args.command "fetch" $ flip Args.info
 				mempty
 				$ fmap CFetch $ FetchOpts
