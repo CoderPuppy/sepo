@@ -125,11 +125,15 @@ cachePlace (SPlaylistTracks pid) = Just $ CachePlace {
 				]
 			,
 		cpDecode = \get bs -> runMaybeT $ do
-			(tracks, comments) <- MaybeT $ pure $ either (const Nothing) Just $
-				MP.runParser (runWriterT parser) ("cachePlace (SPlaylistTracks " <> show pid <> ")") (T.decodeUtf8 bs)
+			let res = MP.runParser
+				(runWriterT $ parser <* Parser.ws <* MP.eof)
+				("cachePlace (SPlaylistTracks " <> show pid <> ")")
+				(T.decodeUtf8 bs)
+			(tracks, comments) <- MaybeT $ pure $ either (const Nothing) Just res
 			[snapshotId] <- pure $ comments >>= (toList . T.stripPrefix "SEPO:PL:SNAPID " . MP.stateInput)
 			-- this is also invalidated when the name changes
 			-- this is to make it easier to determine what playlist is what from the files
+			names <- pure $ comments >>= (toList . T.stripPrefix "SEPO:PL:NAME " . MP.stateInput)
 			[name] <- pure $ comments >>= (toList . T.stripPrefix "SEPO:PL:NAME " . MP.stateInput)
 			name <- MaybeT $ pure $ readMaybe $ T.unpack name
 			pl <- MaybeT $ get $ SPlaylist pid
@@ -168,8 +172,11 @@ cachePlace (SAlbumTracks aid) = Just $ CachePlace {
 			("#SEPO:MODE union":) $
 			fmap (("spotify:track:" <>) . TL.fromStrict . trackId) tracks,
 		cpDecode = \get bs -> runMaybeT $ do
-			(tracks, _) <- MaybeT $ pure $ either (const Nothing) Just $
-				MP.runParser (runWriterT parser) ("cachePlace (SAlbumTracks " <> show aid <> ")") (T.decodeUtf8 bs)
+			let res = MP.runParser
+				(runWriterT $ parser <* Parser.ws <* MP.eof)
+				("cachePlace (SAlbumTracks " <> show aid <> ")")
+				(T.decodeUtf8 bs)
+			(tracks, _) <- MaybeT $ pure $ either (const Nothing) Just res
 			tracks <- for tracks $ \(pos, tid) -> do
 				guard pos
 				MaybeT $ get $ STrack tid
