@@ -6,6 +6,7 @@ import Control.Applicative
 import Control.Monad (join)
 import Control.Monad.IO.Class
 import Control.Monad.Trans.Class (lift)
+import Control.Monad.Trans.Maybe
 import Control.Monad.Trans.Writer.CPS (runWriterT, tell)
 import Data.Aeson (encodeFile, decodeFileStrict)
 import Data.Char (isAlphaNum)
@@ -92,10 +93,10 @@ executeField ctx (PlaylistName name) = do
 executeField ctx (AliasName name) = do
 	alias <- readIORef (aliases ctx) >>= maybe (fail $ "unknown alias: " <> T.unpack name) pure . M.lookup (Right name)
 	executeCmd ctx alias
-executeField ctx Playing = do
-	(context, _) <- Query.dataFetch $ SCurrentlyPlaying
-	(contextType, contextURI) <- maybe (fail "incognito?") pure context
-	case contextType of
+executeField ctx Playing = fmap (fromMaybe $ Value (Strict $ Ordered []) Nothing) $ runMaybeT $ do
+	(context, _) <- MaybeT $ Query.dataFetch SCurrentlyPlaying
+	(contextType, contextURI) <- MaybeT $ pure context
+	lift $ case contextType of
 		HTTP.CTPlaylist -> executeField ctx $ PlaylistId $ (!! 2) $ T.splitOn ":" contextURI
 		HTTP.CTAlbum -> executeCmd ctx $ AlbumId $ (!! 2) $ T.splitOn ":" contextURI
 		HTTP.CTArtist -> executeCmd ctx $ ArtistId $ (!! 2) $ T.splitOn ":" contextURI
@@ -214,8 +215,8 @@ executeCmd ctx (ArtistId ar_id) = do
 			,
 		existing = Just $ ExArtist artist
 	}
-executeCmd ctx PlayingSong = do
-	(_, track) <- Query.dataFetch $ SCurrentlyPlaying
+executeCmd ctx PlayingSong = fmap (fromMaybe $ Value (Strict $ Ordered []) Nothing) $ runMaybeT $ do
+	(_, track) <- MaybeT $ Query.dataFetch SCurrentlyPlaying
 	pure $ Value {
 			tracks = Strict $ Ordered [track],
 			existing = Nothing

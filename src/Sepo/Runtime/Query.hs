@@ -27,6 +27,8 @@ import Data.Functor.Identity (Identity(runIdentity))
 import Data.List.Split (chunksOf)
 import Data.Maybe (fromMaybe, fromJust, isNothing)
 import Data.Traversable (for)
+import Network.HTTP.Types.Status (noContent204)
+import Servant.Client (ClientError(UnsupportedContentType), responseStatusCode)
 import UnliftIO.Async
 import UnliftIO.Directory (createDirectoryIfMissing)
 import UnliftIO.IORef
@@ -72,7 +74,7 @@ srcOthers s v = case (s, v) of
 	(SCurrentUserPlaylists, pls) -> DM.unions $ fmap (\pl -> srcAll (SPlaylist $ playlistId pl) pl) pls
 	(SPlaylist pid, _) -> DM.empty
 	(SPlaylistTracks pid, trs) -> DM.unions $ fmap (\(tr, _) -> srcAll (STrack $ trackId tr) tr) trs
-	(SCurrentlyPlaying, (_, tr)) -> srcAll (STrack $ trackId tr) tr
+	(SCurrentlyPlaying, res) -> maybe DM.empty (\(_, tr) -> srcAll (STrack $ trackId tr) tr) res
 	(STrack tid, tr) -> DM.union
 		(srcAll (SAlbum $ albumId $ trackAlbum tr) (trackAlbum tr))
 		(DM.unions $ fmap (\ar -> srcAll (SArtist $ artistId ar) ar) $ trackArtists tr)
@@ -266,8 +268,14 @@ exec ctx (SPlaylistTracks pid) = do
 			paging <- MaybeT $ pure paging
 			paging <- takeMVar paging
 			HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPagedContinue (HTTP.getPlaylistTracks client pid) paging
-exec ctx SCurrentlyPlaying = pure $ (pure (),) $
-	fmap (getContext &&& getTrack) $ HTTP.run_ (ctxHTTP ctx) HTTP.getCurrentlyPlaying
+exec ctx SCurrentlyPlaying = pure $ (pure (),) $ do
+	res <- HTTP.run (ctxHTTP ctx) HTTP.getCurrentlyPlaying
+	res <- case res of
+		Left (UnsupportedContentType _ res) | responseStatusCode res == noContent204 ->
+			pure Nothing
+		Left err -> fail $ show err
+		Right v -> pure (Just v)
+	pure $ fmap (getContext &&& getTrack) res
 	where
 		getContext = fmap (HTTP.contextType &&& HTTP.contextURI) . HTTP.currentlyPlayingContext
 		getTrack = httpTrack . HTTP.currentlyPlayingItem

@@ -109,7 +109,7 @@ data Source a where
 	SCurrentUserPlaylists :: Source [Playlist]
 	SPlaylist :: T.Text -> Source Playlist
 	SPlaylistTracks :: T.Text -> Source [(Track, UTCTime)]
-	SCurrentlyPlaying :: Source (Maybe (HTTP.ContextType, T.Text), Track)
+	SCurrentlyPlaying :: Source (Maybe (Maybe (HTTP.ContextType, T.Text), Track))
 	STrack :: T.Text -> Source Track
 	SAlbum :: T.Text -> Source Album
 	SAlbumTracks :: T.Text -> Source [Track]
