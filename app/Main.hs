@@ -165,7 +165,7 @@ args = flip Args.info
 				mempty
 				$ fmap CEval $ EvalOpts
 					<$> (fmap (T.intercalate " ") $ some $ Args.argument Args.str (Args.metavar "EXPR" <> Args.help "expression to evaluate"))
-					<*> ((<|> pure (OFSimple True False)) $ Args.option readOutputFormat (Args.long "format" <> Args.metavar "FORMAT" <> Args.help "format to output in, valid options: simple[+], file[+], json"))
+					<*> ((<|> pure (OFSimple True False)) $ Args.option readOutputFormat (Args.long "format" <> Args.metavar "FORMAT" <> Args.help "format to output in, valid options: simple[-][+], file[+], json"))
 			tell $ Args.command "fetch" $ flip Args.info
 				mempty
 				$ fmap CFetch $ FetchOpts
