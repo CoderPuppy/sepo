@@ -73,15 +73,18 @@ instance Aeson.ToJSON Tracks where
 				("count", Aeson.toJSON count)
 			])
 	toEncoding (Ordered tracks) = AesonEnc.list Aeson.toEncoding tracks
-	toEncoding (Unordered tracks) = AesonEnc.dict AesonEnc.text id (foldl . go) $ M.toList tracks
-		where go f acc (track, count) = f (trackId track)
-			(AesonEnc.dict AesonEnc.text id
-				(\f acc () ->
-					f "track" (Aeson.toEncoding track) $
-					f "count" (Aeson.toEncoding count) $
-					acc)
-				())
-			acc
+	toEncoding (Unordered tracks) = encodeTracksSet tracks
+
+encodeTracksSet :: MultiSet Track -> AesonEnc.Encoding
+encodeTracksSet tracks = AesonEnc.dict AesonEnc.text id (foldl . go) $ M.toList tracks
+	where go f acc (track, count) = f (trackId track)
+		(AesonEnc.dict AesonEnc.text id
+			(\f acc () ->
+				f "track" (Aeson.toEncoding track) $
+				f "count" (Aeson.toEncoding count) $
+				acc)
+			())
+		acc
 
 data Existing = ExPlaylist Playlist | ExAlbum Album | ExArtist Artist deriving (Show)
 $(deriveJSON defaultOptions ''Existing)

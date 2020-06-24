@@ -127,7 +127,14 @@ runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 				]
 		OFJSON -> liftIO $ BSL.putStrLn $ Aeson.encodingToLazyByteString $ Aeson.pairs $ mconcat [
 				Aeson.pair "command" $ Aeson.toEncoding $ Expr.reify minBound cmd,
-				Aeson.pair "tracks" $ Aeson.toEncoding tracks,
+				Aeson.pair "tracks" $ Aeson.pairs $ mconcat [
+					Aeson.pair "ordered" $ Aeson.toEncoding $ case tracks of
+						Ordered _ -> True
+						Unordered _ -> False
+						,
+					Aeson.pair "list" $ Aeson.toEncoding $ tracksList tracks,
+					Aeson.pair "set" $ encodeTracksSet $ tracksSet tracks
+				],
 				Aeson.pair "existing" $ Aeson.toEncoding $ existing val
 			]
 runCmd opts queryCtx (CFetch (FetchOpts {..})) = do
