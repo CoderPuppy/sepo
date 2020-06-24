@@ -33,11 +33,14 @@ import qualified Sepo.Expr.Runtime as Expr
 import qualified Sepo.Runtime.FSCache as FSCache
 import qualified Sepo.Runtime.Query as Query
 
-data OutputFormat = OFSimple Bool | OFFile Bool | OFJSON deriving (Show)
+data OutputFormat = OFSimple Bool Bool | OFFile Bool | OFJSON deriving (Show)
 readOutputFormat :: Args.ReadM OutputFormat
 readOutputFormat = Args.maybeReader $ \case
-	"simple"  -> Just $ OFSimple False
-	"simple+" -> Just $ OFSimple True
+	"simple"  -> Just $ OFSimple True False
+	"simple+" -> Just $ OFSimple True True
+	"simple-"  -> Just $ OFSimple False False
+	"simple-+" -> Just $ OFSimple False True
+	"simple+-" -> Just $ OFSimple False True
 	"file"  -> Just $ OFFile False
 	"file+" -> Just $ OFFile True
 	"json" -> Just OFJSON
@@ -68,7 +71,7 @@ runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 			liftIO exitFailure
 		Right cmd -> pure cmd
 	case evalFormat of
-		OFSimple _ -> liftIO $ T.putStrLn $ Expr.reify minBound cmd
+		OFSimple header _ -> when header $ liftIO $ T.putStrLn $ Expr.reify minBound cmd
 		OFFile _ -> liftIO $ T.putStrLn $ "# " <> Expr.reify minBound cmd
 		OFJSON -> pure ()
 	exprCtx <- Expr.start queryCtx
@@ -78,14 +81,15 @@ runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 		-- TODO: lifting this block as a whole seems to be necessary to ensure proper order of message
 		-- this means something is very broken, probably in Fraxl
 		-- also see below
-		OFSimple full -> liftIO $ do
-			putStrLn $ case tracks of
-				Ordered _ -> "ordered"
-				Unordered _ -> "unordered"
-			maybe (pure ()) T.putStrLn $ flip fmap (existing val) $ \case
-				ExArtist ar -> "artist " <> artistName ar <> " (spotify:artist:" <> artistId ar <> ")"
-				ExAlbum al -> "album " <> albumName al <> " featuring " <> formatList "no-one" (fmap artistName $ albumArtists al) <> " (spotify:album:" <> albumId al <> ")"
-				ExPlaylist pl -> "playlist " <> playlistName pl <> " (spotify:playlist:" <> playlistId pl <> ")"
+		OFSimple header full -> liftIO $ do
+			when header $ do
+				putStrLn $ case tracks of
+					Ordered _ -> "ordered"
+					Unordered _ -> "unordered"
+				maybe (pure ()) T.putStrLn $ flip fmap (existing val) $ \case
+					ExArtist ar -> "artist " <> artistName ar <> " (spotify:artist:" <> artistId ar <> ")"
+					ExAlbum al -> "album " <> albumName al <> " featuring " <> formatList "no-one" (fmap artistName $ albumArtists al) <> " (spotify:album:" <> albumId al <> ")"
+					ExPlaylist pl -> "playlist " <> playlistName pl <> " (spotify:playlist:" <> playlistId pl <> ")"
 			for_ (tracksList tracks) $ \track -> T.putStrLn $ mconcat [
 					trackName track,
 					" by ", formatList "no-one" $ fmap artistName $ trackArtists track,
@@ -161,7 +165,7 @@ args = flip Args.info
 				mempty
 				$ fmap CEval $ EvalOpts
 					<$> (fmap (T.intercalate " ") $ some $ Args.argument Args.str (Args.metavar "EXPR" <> Args.help "expression to evaluate"))
-					<*> ((<|> pure (OFSimple False)) $ Args.option readOutputFormat (Args.long "format" <> Args.metavar "FORMAT" <> Args.help "format to output in, valid options: simple[+], file[+], json"))
+					<*> ((<|> pure (OFSimple True False)) $ Args.option readOutputFormat (Args.long "format" <> Args.metavar "FORMAT" <> Args.help "format to output in, valid options: simple[+], file[+], json"))
 			tell $ Args.command "fetch" $ flip Args.info
 				mempty
 				$ fmap CFetch $ FetchOpts
