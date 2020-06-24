@@ -141,6 +141,7 @@ evict ctx s = modifyIORef (ctxCache ctx) $ DM.delete s
 
 fetch :: (MonadIO m, MonadFail m) => Ctx -> Fetch Source m a
 fetch ctx ss = do
+	evict ctx SCurrentlyPlaying
 	cache <- readIORef $ ctxCache ctx
 	-- this is prefetched to allow batching and to be used for later SAlbumTracks
 	albums <- do
