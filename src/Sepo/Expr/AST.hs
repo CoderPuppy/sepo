@@ -31,6 +31,7 @@ data Cmd
 	| Intersect Cmd Cmd
 	| Unique Cmd
 	| Shuffle Cmd
+	| Expand Cmd
 	deriving (Show)
 
 assign :: FieldAccess -> Cmd -> FieldAccess
@@ -103,3 +104,4 @@ instance Reify Cmd where
 	reify d (Intersect a b) = parens (d > PIntersect) $ reify PIntersect a <> " & " <> reify PIntersect b
 	reify d (Unique a) = parens (d > PPrefix) $ "unique " <> reify PPrefix a
 	reify d (Shuffle a) = parens (d > PPrefix) $ "shuffle " <> reify PPrefix a
+	reify d (Expand a) = parens (d > PPrefix) $ "expand " <> reify PPrefix a

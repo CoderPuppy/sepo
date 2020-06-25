@@ -148,6 +148,11 @@ executeFieldAssignment ctx (AliasName name) cmd = do
 		go nms (Intersect a b) = Intersect <$> go nms a <*> go nms b
 		go nms (Unique a) = fmap Unique $ go nms a
 		go nms (Shuffle a) = fmap Shuffle $ go nms a
+		go nms (Expand a) = do
+			tell $ Any True
+			v <- lift $ executeCmd ctx a
+			tracks <- lift $ force $ tracks v
+			pure $ foldl Concat Empty $ fmap (TrackId . trackId) $ tracksList tracks
 		go nms c = pure c
 	(cmd', changed) <- runWriterT $ go (S.singleton name) cmd
 	liftIO $ T.appendFile (aliasesPath ctx) $ "_" <> reifyQuoted name <> " = " <> reify minBound cmd' <> ";\n"
@@ -176,6 +181,10 @@ executeFieldAssignment ctx (File path) cmd = do
 		go (Intersect a b) = Intersect <$> go a <*> go b
 		go (Unique a) = fmap Unique $ go a
 		go (Shuffle a) = fmap Shuffle $ go a
+		go (Expand a) = do
+			v <- executeCmd ctx a
+			tracks <- force $ tracks v
+			pure $ foldl Concat Empty $ fmap (TrackId . trackId) $ tracksList tracks
 		go c = pure c
 	cmd' <- go cmd
 	liftIO $ T.writeFile path $ reify minBound cmd'
@@ -244,6 +253,7 @@ executeCmd ctx (Unique cmd) = do
 	val <- executeCmd ctx cmd
 	pure $ Value (fmap (Unordered . M.map (const 1) . tracksSet) $ tracks val) Nothing
 executeCmd ctx (Shuffle a) = fail "TODO: shuffle"
+executeCmd ctx (Expand a) = executeCmd ctx a
 
 compileFilter :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Cmd -> m Filter.Filter
 compileFilter ctx (Field (FieldAccess (AliasName name) [])) = do
@@ -260,6 +270,7 @@ compileFilter ctx (Intersect a b) = Filter.intersect <$> compileFilter ctx a <*>
 compileFilter ctx (Subtract a b) = Filter.subtract <$> compileFilter ctx a <*> compileFilter ctx b
 compileFilter ctx (Unique cmd) = compileFilter ctx cmd
 compileFilter ctx (Shuffle cmd) = compileFilter ctx cmd
+compileFilter ctx (Expand cmd) = compileFilter ctx cmd
 compileFilter ctx cmd = do
 	val <- executeCmd ctx cmd
 	tracks <- force $ tracks val

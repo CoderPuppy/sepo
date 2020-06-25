@@ -109,6 +109,7 @@ unaryOps :: [([T.Text], Cmd -> Cmd)]
 unaryOps = execWriter $ do
 	tell $ pure (["unique", "uniq", "u"], Unique)
 	tell $ pure (["shuffle", "shuf", "s"], Unique)
+	tell $ pure (["expand", "exp", "e"], Expand)
 
 assignableOp :: MonadFail m => Bool -> (Cmd -> Cmd) -> Expr -> m Expr
 assignableOp modify op e = do
