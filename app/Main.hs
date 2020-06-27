@@ -82,7 +82,12 @@ runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 		OFFile _ -> liftIO $ T.putStrLn $ "# " <> Expr.reify minBound cmd
 		OFJSON -> pure ()
 	exprCtx <- Expr.start queryCtx
-	val <- Expr.executeCmd exprCtx cmd
+	(val, cmd') <- Expr.executeCmd exprCtx Expr.initialStack cmd
+	cmd' <- cmd'
+	case evalFormat of
+		OFSimple header _ -> when header $ liftIO $ T.putStrLn $ Expr.reify minBound cmd'
+		OFFile _ -> liftIO $ T.putStrLn $ "# " <> Expr.reify minBound cmd'
+		OFJSON -> pure ()
 	tracks <- force $ tracks val
 	case evalFormat of
 		-- TODO: lifting this block as a whole seems to be necessary to ensure proper order of message
@@ -134,6 +139,7 @@ runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 				]
 		OFJSON -> liftIO $ BSL.putStrLn $ Aeson.encodingToLazyByteString $ Aeson.pairs $ mconcat [
 				Aeson.pair "command" $ Aeson.toEncoding $ Expr.reify minBound cmd,
+				Aeson.pair "expandedCommand" $ Aeson.toEncoding $ Expr.reify minBound cmd',
 				Aeson.pair "tracks" $ Aeson.pairs $ mconcat [
 					Aeson.pair "ordered" $ Aeson.toEncoding $ case tracks of
 						Ordered _ -> True
