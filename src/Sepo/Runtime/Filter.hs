@@ -90,3 +90,13 @@ subtract a b = Filter {
 		negSet = M.union (posSet b)
 			(M.filterWithKey (flip $ const $ not . posPred a) (negSet a))
 	}
+
+vIntersect :: Functor m => Value m -> Filter -> Value m
+vIntersect a b = flip Value Nothing $ flip fmap (tracks a) $ \case
+	Ordered tracks -> Ordered $ filter (apply b) tracks
+	Unordered tracks -> Unordered $ applyIntersect b tracks
+
+vSubtract :: Functor m => Value m -> Filter -> Value m
+vSubtract a b = flip Value Nothing $ flip fmap (tracks a) $ \case
+	Ordered tracks -> Ordered $ filter (not . apply b) tracks
+	Unordered tracks -> Unordered $ applySubtract b tracks

@@ -93,6 +93,16 @@ data Value m = Value {
 	existing :: Maybe Existing
 }
 
+vConcat :: Applicative m => Value m -> Value m -> Value m
+vConcat a b = flip Value Nothing $ flip fmap ((,) <$> tracks a <*> tracks b) $ \case
+	(Ordered a, Ordered b) -> Ordered $ a ++ b
+	(Ordered a, Unordered b) -> Ordered $ a ++ msToL b
+	(Unordered a, Ordered b) -> Ordered $ msToL a ++ b
+	(Unordered a, Unordered b) -> Unordered $ M.unionWith (+) a b
+
+vUnique :: Functor m => Value m -> Value m
+vUnique = flip Value Nothing . fmap (Unordered . M.map (const 1) . tracksSet) . tracks
+
 data Thunk m a = Strict a | Lazy (m a) deriving (Functor)
 force :: Applicative m => Thunk m a -> m a
 force (Strict v) = pure v

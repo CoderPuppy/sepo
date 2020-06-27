@@ -225,35 +225,18 @@ executeCmd ctx stack (RevSeq a b) = do
 executeCmd ctx stack (Concat a b) = do
 	(a, a') <- executeCmd ctx stack a
 	(b, b') <- executeCmd ctx stack b
-	pure (
-			flip Value Nothing $ flip fmap ((,) <$> tracks a <*> tracks b) $ \case
-				(Ordered a, Ordered b) -> Ordered $ a ++ b
-				(Ordered a, Unordered b) -> Ordered $ a ++ msToL b
-				(Unordered a, Ordered b) -> Ordered $ msToL a ++ b
-				(Unordered a, Unordered b) -> Unordered $ M.unionWith (+) a b
-				,
-			Concat <$> a' <*> b'
-		)
+	pure (vConcat a b, Concat <$> a' <*> b')
 executeCmd ctx stack (Intersect a b) = do
 	(a, a') <- executeCmd ctx stack a
 	(b, b') <- compileFilter ctx stack b
-	let tracks' = flip fmap (tracks a) $ \case
-		Ordered tracks -> Ordered $ filter (Filter.apply b) tracks
-		Unordered tracks -> Unordered $ Filter.applyIntersect b tracks
-	pure (Value tracks' Nothing, Intersect <$> a' <*> b')
+	pure (Filter.vIntersect a b, Intersect <$> a' <*> b')
 executeCmd ctx stack (Subtract a b) = do
 	(a, a') <- executeCmd ctx stack a
 	(b, b') <- compileFilter ctx stack b
-	let tracks' = flip fmap (tracks a) $ \case
-		Ordered tracks -> Ordered $ filter (not . Filter.apply b) tracks
-		Unordered tracks -> Unordered $ Filter.applySubtract b tracks
-	pure (Value tracks' Nothing, Subtract <$> a' <*> b')
+	pure (Filter.vSubtract a b, Subtract <$> a' <*> b')
 executeCmd ctx stack (Unique cmd) = do
 	(val, cmd') <- executeCmd ctx stack cmd
-	pure (
-			Value (fmap (Unordered . M.map (const 1) . tracksSet) $ tracks val) Nothing,
-			fmap Unique cmd'
-		)
+	pure (vUnique val, fmap Unique cmd')
 executeCmd ctx stack (Shuffle a) = fail "TODO: shuffle"
 executeCmd ctx stack (Expand cmd) = do
 	(val, cmd') <- executeCmd ctx stack cmd
