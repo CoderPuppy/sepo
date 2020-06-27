@@ -89,7 +89,7 @@ encodeTracksSet tracks = AesonEnc.dict AesonEnc.text id (foldl . go) $ M.toList 
 data Existing = ExPlaylist Playlist | ExAlbum Album | ExArtist Artist deriving (Show)
 $(deriveJSON defaultOptions ''Existing)
 data Value m = Value {
-	tracks :: Thunk m Tracks,
+	tracks :: m Tracks,
 	existing :: Maybe Existing
 }
 
@@ -105,20 +105,6 @@ vConcat a b = flip Value Nothing $ flip fmap ((,) <$> tracks a <*> tracks b) $ \
 
 vUnique :: Functor m => Value m -> Value m
 vUnique = flip Value Nothing . fmap (Unordered . M.map (const 1) . tracksSet) . tracks
-
-data Thunk m a = Strict a | Lazy (m a) deriving (Functor)
-force :: Applicative m => Thunk m a -> m a
-force (Strict v) = pure v
-force (Lazy thunk) = thunk
-joinThunk :: Monad m => Thunk m (m a) -> m (Thunk m a)
-joinThunk (Strict m) = fmap Strict m
-joinThunk (Lazy m) = pure $ Lazy $ join m
-instance Applicative m => Applicative (Thunk m) where
-	pure = Strict
-	Strict f <*> Strict a = Strict $ f a
-	Strict f <*> Lazy a = Lazy $ f <$> a
-	Lazy f <*> Strict a = Lazy $ ($ a) <$> f
-	Lazy f <*> Lazy a = Lazy $ f <*> a
 
 data Source a where
 	SCurrentUser :: Source T.Text

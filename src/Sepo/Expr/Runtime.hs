@@ -90,10 +90,8 @@ executeField ctx stack f@(PlaylistId pl_id) = do
 	playlist <- Query.dataFetch $ SPlaylist pl_id
 	pure (
 			Value {
-				tracks = Lazy $
-					-- TODO: check for a Sepo tag for unordered
-					fmap (Ordered . fmap fst) $ Query.dataFetch $ SPlaylistTracks pl_id
-					,
+				-- TODO: check for a Sepo tag for unordered
+				tracks = fmap (Ordered . fmap fst) $ Query.dataFetch $ SPlaylistTracks pl_id,
 				existing = Just $ ExPlaylist playlist
 			},
 			pure $ Field $ FieldAccess f []
@@ -108,7 +106,7 @@ executeField ctx stack f@(AliasName name) = do
 	pure (val, if S.member name (stAliases stack) then cmd else pure $ Field $ FieldAccess f [])
 executeField ctx stack Playing =
 	fmap (, pure $ Field $ FieldAccess Playing []) $
-	fmap (fromMaybe $ Value (Strict $ Ordered []) Nothing) $
+	fmap (fromMaybe $ Value (pure $ Ordered []) Nothing) $
 	runMaybeT $ do
 		(context, _) <- MaybeT $ Query.dataFetch SCurrentlyPlaying
 		(contextType, contextURI) <- MaybeT $ pure context
@@ -128,7 +126,7 @@ executeField ctx stack f@(File path) = do
 executeFieldAssignment :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Stack -> Field -> Cmd -> m (Value m, m Cmd)
 executeFieldAssignment ctx stack (PlaylistId pl_id) cmd = do
 	(val, cmd') <- executeCmd ctx stack cmd
-	tracks <- force $ tracks val
+	tracks <- tracks val
 	let chunks = chunksOf 100 $ tracksList tracks
 	playlist <- Query.apply (queryCtx ctx) $ APlaylistReplace pl_id $ fromMaybe [] $ listToMaybe chunks
 	let addTracks chunk = Query.apply (queryCtx ctx) $ APlaylistAdd pl_id Nothing chunk
@@ -177,7 +175,7 @@ executeCmd ctx stack (Field (FieldAccess field (cmd:cmds))) = do
 	pure (val, Seq <$> fmap (Field . FieldAccess field . pure) cmd1 <*> cmd2)
 executeCmd ctx stack (TrackId tr_id) = pure (
 		Value {
-			tracks = Lazy $ fmap (Ordered . pure) $ Query.dataFetch $ STrack tr_id,
+			tracks = fmap (Ordered . pure) $ Query.dataFetch $ STrack tr_id,
 			existing = Nothing
 		},
 		pure $ TrackId tr_id
@@ -186,7 +184,7 @@ executeCmd ctx stack (AlbumId al_id) = do
 	album <- Query.dataFetch $ SAlbum al_id
 	pure (
 			Value {
-				tracks = Lazy $ fmap Ordered $ Query.dataFetch $ SAlbumTracks al_id,
+				tracks = fmap Ordered $ Query.dataFetch $ SAlbumTracks al_id,
 				existing = Just $ ExAlbum album
 			},
 			pure $ AlbumId al_id
@@ -195,7 +193,7 @@ executeCmd ctx stack (ArtistId ar_id) = do
 	artist <- Query.dataFetch $ SArtist ar_id
 	pure (
 			Value {
-				tracks = Lazy $ do
+				tracks = do
 					albums <- Query.dataFetch $ SArtistAlbums ar_id
 					trackss <- for albums $ Query.dataFetch . SAlbumTracks . albumId
 					pure $ Unordered $ M.fromList $ fmap (, 1) $ filter (any ((== ar_id) . artistId) . trackArtists) $ join $ trackss
@@ -206,11 +204,11 @@ executeCmd ctx stack (ArtistId ar_id) = do
 		)
 executeCmd ctx stack PlayingSong =
 	fmap (, pure PlayingSong) $
-	fmap (fromMaybe $ Value (Strict $ Ordered []) Nothing) $
+	fmap (fromMaybe $ Value (pure $ Ordered []) Nothing) $
 	runMaybeT $ do
 		(_, track) <- MaybeT $ Query.dataFetch SCurrentlyPlaying
 		pure $ Value {
-				tracks = Strict $ Ordered [track],
+				tracks = pure $ Ordered [track],
 				existing = Nothing
 			}
 executeCmd ctx stack Empty = pure (vEmpty, pure Empty)
@@ -240,7 +238,7 @@ executeCmd ctx stack (Unique cmd) = do
 executeCmd ctx stack (Shuffle a) = fail "TODO: shuffle"
 executeCmd ctx stack (Expand cmd) = do
 	(val, cmd') <- executeCmd ctx stack cmd
-	pure (val, fmap (foldl Concat Empty . fmap (TrackId . trackId) . tracksList) $ force $ tracks val)
+	pure (val, fmap (foldl Concat Empty . fmap (TrackId . trackId) . tracksList) $ tracks val)
 
 compileFilter :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Stack -> Cmd -> m ((Filter.Filter, m (Value m)), m Cmd)
 compileFilter ctx stack (Field (FieldAccess f@(AliasName name) [])) = do
@@ -295,9 +293,9 @@ compileFilter ctx stack (Expand cmd) = do
 	((filter, val), cmd') <- compileFilter ctx stack cmd
 	pure $ ((filter, val),) $ do
 		val <- val
-		tracks <- force $ tracks val
+		tracks <- tracks val
 		pure $ foldl Concat Empty $ fmap (TrackId . trackId) $ tracksList tracks
 compileFilter ctx stack cmd = do
 	(val, cmd') <- executeCmd ctx stack cmd
-	tracks <- force $ tracks val
+	tracks <- tracks val
 	pure ((mempty { Filter.posSet = tracksSet tracks }, pure val), cmd')

@@ -88,7 +88,7 @@ runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 		OFSimple header _ -> when header $ liftIO $ T.putStrLn $ Expr.reify minBound cmd'
 		OFFile _ -> liftIO $ T.putStrLn $ "# " <> Expr.reify minBound cmd'
 		OFJSON -> pure ()
-	tracks <- force $ tracks val
+	tracks <- tracks val
 	case evalFormat of
 		-- TODO: lifting this block as a whole seems to be necessary to ensure proper order of message
 		-- this means something is very broken, probably in Fraxl
