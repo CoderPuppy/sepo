@@ -93,6 +93,9 @@ data Value m = Value {
 	existing :: Maybe Existing
 }
 
+vEmpty :: Applicative m => Value m
+vEmpty = Value (pure $ Unordered M.empty) Nothing
+
 vConcat :: Applicative m => Value m -> Value m -> Value m
 vConcat a b = flip Value Nothing $ flip fmap ((,) <$> tracks a <*> tracks b) $ \case
 	(Ordered a, Ordered b) -> Ordered $ a ++ b

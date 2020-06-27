@@ -213,7 +213,7 @@ executeCmd ctx stack PlayingSong =
 				tracks = Strict $ Ordered [track],
 				existing = Nothing
 			}
-executeCmd ctx stack Empty = pure (Value (pure $ Unordered M.empty) Nothing, pure Empty)
+executeCmd ctx stack Empty = pure (vEmpty, pure Empty)
 executeCmd ctx stack (Seq a b) = do
 	(_, a') <- executeCmd ctx stack a
 	(val, b') <- executeCmd ctx stack b
@@ -228,11 +228,11 @@ executeCmd ctx stack (Concat a b) = do
 	pure (vConcat a b, Concat <$> a' <*> b')
 executeCmd ctx stack (Intersect a b) = do
 	(a, a') <- executeCmd ctx stack a
-	(b, b') <- compileFilter ctx stack b
+	((b, _), b') <- compileFilter ctx stack b
 	pure (Filter.vIntersect a b, Intersect <$> a' <*> b')
 executeCmd ctx stack (Subtract a b) = do
 	(a, a') <- executeCmd ctx stack a
-	(b, b') <- compileFilter ctx stack b
+	((b, _), b') <- compileFilter ctx stack b
 	pure (Filter.vSubtract a b, Subtract <$> a' <*> b')
 executeCmd ctx stack (Unique cmd) = do
 	(val, cmd') <- executeCmd ctx stack cmd
@@ -242,24 +242,33 @@ executeCmd ctx stack (Expand cmd) = do
 	(val, cmd') <- executeCmd ctx stack cmd
 	pure (val, fmap (foldl Concat Empty . fmap (TrackId . trackId) . tracksList) $ force $ tracks val)
 
-compileFilter :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Stack -> Cmd -> m (Filter.Filter, m Cmd)
+compileFilter :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Stack -> Cmd -> m ((Filter.Filter, m (Value m)), m Cmd)
 compileFilter ctx stack (Field (FieldAccess f@(AliasName name) [])) = do
 	alias <- readIORef (aliases ctx) >>= maybe (fail $ "unknown alias: " <> T.unpack name) pure . M.lookup (Right name)
-	(filter, cmd) <- compileFilter ctx (stack { stAliases = S.insert name (stAliases stack) }) alias
-	pure (filter, if S.member name (stAliases stack) then cmd else pure $ Field $ FieldAccess f [])
+	(res, cmd) <- compileFilter ctx (stack { stAliases = S.insert name (stAliases stack) }) alias
+	pure (res, if S.member name (stAliases stack) then cmd else pure $ Field $ FieldAccess f [])
 compileFilter ctx stack (TrackId tr_id) = pure (
-		mempty { Filter.posPred = \track -> (== tr_id) $ trackId track },
+		(
+			mempty { Filter.posPred = \track -> (== tr_id) $ trackId track },
+			fmap fst $ executeCmd ctx stack $ TrackId tr_id
+		),
 		pure $ TrackId tr_id
 	)
 compileFilter ctx stack (AlbumId al_id) = pure (
-		mempty { Filter.posPred = \track -> (== al_id) $ albumId $ trackAlbum track },
+		(
+			mempty { Filter.posPred = \track -> (== al_id) $ albumId $ trackAlbum track },
+			fmap fst $ executeCmd ctx stack $ AlbumId al_id
+		),
 		pure $ AlbumId al_id
 	)
 compileFilter ctx stack (ArtistId ar_id) = pure (
-		mempty { Filter.posPred = \track -> elem ar_id $ fmap artistId $ trackArtists track },
+		(
+			mempty { Filter.posPred = \track -> elem ar_id $ fmap artistId $ trackArtists track },
+			fmap fst $ executeCmd ctx stack $ ArtistId ar_id
+		),
 		pure $ ArtistId ar_id
 	)
-compileFilter ctx stack Empty = pure (mempty, pure Empty)
+compileFilter ctx stack Empty = pure ((mempty, pure vEmpty), pure Empty)
 compileFilter ctx stack (Seq a b) = do
 	(_, a') <- executeCmd ctx stack a
 	(b, b') <- compileFilter ctx stack b
@@ -269,21 +278,26 @@ compileFilter ctx stack (RevSeq a b) = do
 	(_, b') <- executeCmd ctx stack b
 	pure (a, RevSeq <$> a' <*> b')
 compileFilter ctx stack (Concat a b) = do
-	(a, a') <- compileFilter ctx stack a
-	(b, b') <- compileFilter ctx stack b
-	pure (Filter.union a b, Concat <$> a' <*> b')
+	((af, av), a') <- compileFilter ctx stack a
+	((bf, bv), b') <- compileFilter ctx stack b
+	pure ((Filter.union af bf, vConcat <$> av <*> bv), Concat <$> a' <*> b')
 compileFilter ctx stack (Intersect a b) = do
-	(a, a') <- compileFilter ctx stack a
-	(b, b') <- compileFilter ctx stack b
-	pure (Filter.union a b, Intersect <$> a' <*> b')
+	((af, av), a') <- compileFilter ctx stack a
+	((bf, bv), b') <- compileFilter ctx stack b
+	pure ((Filter.union af bf, fmap (flip Filter.vIntersect bf) av), Intersect <$> a' <*> b')
 compileFilter ctx stack (Subtract a b) = do
-	(a, a') <- compileFilter ctx stack a
-	(b, b') <- compileFilter ctx stack b
-	pure (Filter.union a b, Subtract <$> a' <*> b')
+	((af, av), a') <- compileFilter ctx stack a
+	((bf, bv), b') <- compileFilter ctx stack b
+	pure ((Filter.union af bf, fmap (flip Filter.vSubtract bf) av), Subtract <$> a' <*> b')
 compileFilter ctx stack (Unique cmd) = fmap (second $ fmap Unique) $ compileFilter ctx stack cmd
 compileFilter ctx stack (Shuffle cmd) = fmap (second $ fmap Shuffle) $ compileFilter ctx stack cmd
--- compileFilter ctx stack (Expand cmd) = compileFilter ctx stack cmd -- TODO
+compileFilter ctx stack (Expand cmd) = do
+	((filter, val), cmd') <- compileFilter ctx stack cmd
+	pure $ ((filter, val),) $ do
+		val <- val
+		tracks <- force $ tracks val
+		pure $ foldl Concat Empty $ fmap (TrackId . trackId) $ tracksList tracks
 compileFilter ctx stack cmd = do
 	(val, cmd') <- executeCmd ctx stack cmd
 	tracks <- force $ tracks val
-	pure (mempty { Filter.posSet = tracksSet tracks }, cmd')
+	pure ((mempty { Filter.posSet = tracksSet tracks }, pure val), cmd')
