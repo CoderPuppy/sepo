@@ -110,6 +110,9 @@ unaryOps = execWriter $ do
 	tell $ pure (["unique", "uniq", "u"], Unique)
 	tell $ pure (["shuffle", "shuf", "s"], Unique)
 	tell $ pure (["expand", "exp", "e"], Expand)
+	tell $ pure (["sort_track", "sortTrack", "sort_t", "sort_tr", "str", "st"], SortTrack)
+	tell $ pure (["sort_album", "sortAlbum", "sort_al", "sal"], SortAlbum)
+	tell $ pure (["sort_artist", "sortArtist", "sort_ar", "sar"], SortArtist)
 
 assignableOp :: MonadFail m => Bool -> (Cmd -> Cmd) -> Expr -> m Expr
 assignableOp modify op e = do

@@ -239,6 +239,15 @@ executeCmd ctx stack (Shuffle a) = fail "TODO: shuffle"
 executeCmd ctx stack (Expand cmd) = do
 	(val, cmd') <- executeCmd ctx stack cmd
 	pure (val, fmap (foldl Concat Empty . fmap (TrackId . trackId) . tracksList) $ tracks val)
+executeCmd ctx stack (SortTrack cmd) = do
+	(val, cmd') <- executeCmd ctx stack cmd
+	pure (vSortTrack val, fmap SortTrack cmd')
+executeCmd ctx stack (SortAlbum cmd) = do
+	(val, cmd') <- executeCmd ctx stack cmd
+	pure (vSortAlbum val, fmap SortAlbum cmd')
+executeCmd ctx stack (SortArtist cmd) = do
+	(val, cmd') <- executeCmd ctx stack cmd
+	pure (vSortArtist val, fmap SortArtist cmd')
 
 compileFilter :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Stack -> Cmd -> m ((Filter.Filter, m (Value m)), m Cmd)
 compileFilter ctx stack (Field (FieldAccess f@(AliasName name) [])) = do
@@ -299,6 +308,15 @@ compileFilter ctx stack (Expand cmd) = do
 		val <- val
 		tracks <- tracks val
 		pure $ foldl Concat Empty $ fmap (TrackId . trackId) $ tracksList tracks
+compileFilter ctx stack (SortTrack cmd) = do
+	((filter, val), cmd') <- compileFilter ctx stack cmd
+	pure ((filter, fmap vSortTrack val), fmap SortTrack cmd')
+compileFilter ctx stack (SortAlbum cmd) = do
+	((filter, val), cmd') <- compileFilter ctx stack cmd
+	pure ((filter, fmap vSortAlbum val), fmap SortAlbum cmd')
+compileFilter ctx stack (SortArtist cmd) = do
+	((filter, val), cmd') <- compileFilter ctx stack cmd
+	pure ((filter, fmap vSortArtist val), fmap SortArtist cmd')
 compileFilter ctx stack cmd = do
 	(val, cmd') <- executeCmd ctx stack cmd
 	tracks <- tracks val

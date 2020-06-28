@@ -32,6 +32,9 @@ data Cmd
 	| Unique Cmd
 	| Shuffle Cmd
 	| Expand Cmd
+	| SortTrack Cmd
+	| SortAlbum Cmd
+	| SortArtist Cmd
 	deriving (Show)
 
 assign :: FieldAccess -> Cmd -> FieldAccess
@@ -105,3 +108,6 @@ instance Reify Cmd where
 	reify d (Unique a) = parens (d > PPrefix) $ "unique " <> reify PPrefix a
 	reify d (Shuffle a) = parens (d > PPrefix) $ "shuffle " <> reify PPrefix a
 	reify d (Expand a) = parens (d > PPrefix) $ "expand " <> reify PPrefix a
+	reify d (SortTrack a) = parens (d > PPrefix) $ "sort_track " <> reify PPrefix a
+	reify d (SortAlbum a) = parens (d > PPrefix) $ "sort_album " <> reify PPrefix a
+	reify d (SortArtist a) = parens (d > PPrefix) $ "sort_artist " <> reify PPrefix a

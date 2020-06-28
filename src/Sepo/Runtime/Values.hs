@@ -7,7 +7,7 @@ import Control.Monad.Fraxl (GEq(..), GCompare(..), GOrdering(..))
 import Data.Aeson.TH (deriveJSON, defaultOptions, fieldLabelModifier, sumEncoding, SumEncoding(UntaggedValue))
 import Data.Bool (bool)
 import Data.Char (toLower)
-import Data.List (stripPrefix)
+import Data.List (stripPrefix, sortOn)
 import Data.Maybe (fromJust)
 import Data.Time.Clock (UTCTime)
 import Data.Type.Equality ((:~:)(Refl))
@@ -105,6 +105,15 @@ vConcat a b = flip Value Nothing $ flip fmap ((,) <$> tracks a <*> tracks b) $ \
 
 vUnique :: Functor m => Value m -> Value m
 vUnique = flip Value Nothing . fmap (Unordered . M.map (const 1) . tracksSet) . tracks
+
+vSortTrack :: Functor m => Value m -> Value m
+vSortTrack = flip Value Nothing . fmap (Ordered . sortOn trackName . tracksList) . tracks
+
+vSortAlbum :: Functor m => Value m -> Value m
+vSortAlbum = flip Value Nothing . fmap (Ordered . sortOn (albumName . trackAlbum) . tracksList) . tracks
+
+vSortArtist :: Functor m => Value m -> Value m
+vSortArtist = flip Value Nothing . fmap (Ordered . sortOn (fmap artistName . trackArtists) . tracksList) . tracks
 
 data Source a where
 	SCurrentUser :: Source T.Text
