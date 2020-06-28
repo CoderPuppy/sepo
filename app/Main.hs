@@ -5,7 +5,6 @@ import Control.Applicative
 import Control.Arrow
 import Control.Monad
 import Control.Monad.IO.Class
-import Control.Monad.Trans.Except
 import Control.Monad.Trans.Writer
 import Data.Bool (bool)
 import Data.Dependent.Sum
@@ -54,7 +53,7 @@ data Command
 	deriving (Show)
 data EvalOpts = EvalOpts {
 	evalFormat :: OutputFormat,
-	evalSrc :: Maybe T.Text -- Nothing → stdin
+	evalSrc :: T.Text
 } deriving (Show)
 data FetchOpts = FetchOpts {
 	fetchUserPlaylists :: Bool,
@@ -65,13 +64,7 @@ type M = Query.FreerT Query.Source (Conduit.ResourceT IO)
 
 runCmd :: Options -> Query.Ctx -> Command -> M ()
 runCmd opts queryCtx (CEval (EvalOpts {..})) = do
-	cmd <- runExceptT $ case evalSrc of
-		Just src -> fmap fst $ ExceptT $ pure $ runParser (runWriterT $ fmap Expr.exprCmd Expr.expr <* eof) "cmdline" src
-		Nothing -> do
-			src <- liftIO $ T.hGetContents stdin
-			(cmds, comments) <- ExceptT $ pure $ runParser (runWriterT $ Expr.compoundInner <* Expr.ws <* eof) "stdin" src
-			Expr.handleMode (cmds, comments)
-	cmd <- case cmd of
+	cmd <- case fmap fst $ runParser (runWriterT $ fmap Expr.exprCmd Expr.expr <* eof) "cmdline" evalSrc of
 		Left err -> do
 			liftIO $ hPutStrLn stderr "Parse error"
 			liftIO $ hPutStr stderr $ errorBundlePretty err
@@ -185,9 +178,7 @@ args = flip Args.info
 				mempty
 				$ fmap CEval $ EvalOpts
 					<$> ((<|> pure (OFSimple True False)) $ Args.option readOutputFormat (Args.long "format" <> Args.metavar "FORMAT" <> Args.help "format to output in, valid options: simple[-][+], file[+], json"))
-					<*>
-						(   (fmap (Just . T.intercalate " ") $ some $ Args.argument Args.str (Args.metavar "EXPR" <> Args.help "expression to evaluate"))
-						<|> Args.flag' Nothing (Args.long "stdin" <> Args.help "read expression from standard in"))
+					<*> (fmap (T.intercalate " ") $ some $ Args.argument Args.str (Args.metavar "EXPR" <> Args.help "expression to evaluate"))
 			tell $ Args.command "fetch" $ flip Args.info
 				mempty
 				$ fmap CFetch $ FetchOpts
