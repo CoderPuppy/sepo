@@ -53,6 +53,7 @@ data Command
 	deriving (Show)
 data EvalOpts = EvalOpts {
 	evalFormat :: OutputFormat,
+	evalAligned :: Bool,
 	evalSrc :: T.Text
 } deriving (Show)
 data FetchOpts = FetchOpts {
@@ -95,19 +96,17 @@ runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 					ExArtist ar -> "artist " <> artistName ar <> " (spotify:artist:" <> artistId ar <> ")"
 					ExAlbum al -> "album " <> albumName al <> " featuring " <> formatList "no-one" (fmap artistName $ albumArtists al) <> " (spotify:album:" <> albumId al <> ")"
 					ExPlaylist pl -> "playlist " <> playlistName pl <> " (spotify:playlist:" <> playlistId pl <> ")"
-			for_ (tracksList tracks) $ \track -> T.putStrLn $ mconcat [
-					trackName track,
-					" by ", formatList "no-one" $ fmap artistName $ trackArtists track,
-					" from ", albumName $ trackAlbum track,
-					" (spotify:track:", trackId track,
-					if full
-					then mconcat [
-							" by ", formatList "no-one" $ fmap (("spotify:artist:" <>) . artistId) $ trackArtists track,
-							" from spotify:album:", albumId $ trackAlbum track
-						]
-					else "",
-					")"
+			printParts $ (if evalAligned then aligned else id) $ flip fmap (tracksList tracks) $ \track -> [
+					(trackName track, ""),
+					((" by " <>) $ formatList "no-one" $ fmap artistName $ trackArtists track, ""),
+					((" from " <>) $ albumName $ trackAlbum track, "")
+				] ++ if full
+				then [
+					(" (spotify:track:" <> trackId track, ""),
+					((" by " <>) $ formatList "no-one" $ fmap (("spotify:artist:" <>) . artistId) $ trackArtists track, ""),
+					((" from spotify:album:" <>) $ (<> ")") $ albumId $ trackAlbum track, "")
 				]
+				else [(" (spotify:track:" <> trackId track <> ")", "")]
 		-- TODO: see above
 		OFFile full -> liftIO $ do
 			putStrLn $ case tracks of
@@ -117,19 +116,17 @@ runCmd opts queryCtx (CEval (EvalOpts {..})) = do
 				ExArtist ar -> "# artist " <> artistName ar <> " (spotify:artist:" <> artistId ar <> ")"
 				ExAlbum al -> "# album " <> albumName al <> " featuring " <> formatList "no-one" (fmap artistName $ albumArtists al) <> " (spotify:album:" <> albumId al <> ")"
 				ExPlaylist pl -> "# playlist " <> playlistName pl <> " (spotify:playlist:" <> playlistId pl <> ")"
-			for_ (tracksList tracks) $ \track -> T.putStrLn $ mconcat [
-					"spotify:track:", trackId track,
-					" # ", trackName track,
-					" by ", formatList "no-one" $ fmap artistName $ trackArtists track,
-					" from ", albumName $ trackAlbum track,
-					if full
-					then mconcat [
-							" (by ", formatList "no-one" $ fmap (("spotify:artist:" <>) . artistId) $ trackArtists track,
-							" from spotify:album:", albumId $ trackAlbum track,
-							")"
-						]
-					else ""
+			printParts $ (if evalAligned then aligned else id) $ flip fmap (tracksList tracks) $ \track -> [
+					("spotify:track:" <> trackId track, ""),
+					(" # " <> trackName track, ""),
+					((" by " <>) $ formatList "no-one" $ fmap artistName $ trackArtists track, ""),
+					((" from " <>) $ albumName $ trackAlbum track, "")
+				] ++ if full
+				then [
+					((" (by " <>) $ formatList "no-one" $ fmap (("spotify:artist:" <>) . artistId) $ trackArtists track, ""),
+					((" from spotify:album:" <>) $ (<> ")") $ albumId $ trackAlbum track, "")
 				]
+				else []
 		OFJSON -> liftIO $ BSL.putStrLn $ Aeson.encodingToLazyByteString $ Aeson.pairs $ mconcat [
 				Aeson.pair "command" $ Aeson.toEncoding $ Expr.reify minBound cmd,
 				Aeson.pair "expandedCommand" $ Aeson.toEncoding $ Expr.reify minBound cmd',
@@ -178,6 +175,9 @@ args = flip Args.info
 				mempty
 				$ fmap CEval $ EvalOpts
 					<$> ((<|> pure (OFSimple True False)) $ Args.option readOutputFormat (Args.long "format" <> Args.metavar "FORMAT" <> Args.help "format to output in, valid options: simple[-][+], file[+], json"))
+					<*> (fmap (foldl (const id) False) $ many
+						$   Args.flag' False (Args.long "no-aligned")
+						<|> Args.flag' True (Args.long "aligned" <> Args.help "align the columns of the track list"))
 					<*> (fmap (T.intercalate " ") $ some $ Args.argument Args.str (Args.metavar "EXPR" <> Args.help "expression to evaluate"))
 			tell $ Args.command "fetch" $ flip Args.info
 				mempty
@@ -201,3 +201,13 @@ main = do
 formatList :: (IsString a, Semigroup a, Foldable f) => a -> f a -> a
 formatList empty lst = maybe empty (uncurry $ maybe id ((<>) . (<> ", and "))) acc
 	where acc = foldl (\acc el -> Just (fmap (uncurry $ maybe id ((<>) . (<> ", "))) acc, el)) Nothing lst
+
+aligned :: [[(T.Text, T.Text)]] -> [[(T.Text, T.Text)]]
+aligned rows = fmap (zipWith pad lengths) rows
+	where
+		numParts = maximum $ fmap length rows
+		lengths = fmap (\i -> (maximum *** maximum) $ unzip $ fmap ((T.length *** T.length) . (!! i)) rows) [0..numParts - 1]
+		pad (lLen, rLen) (lTxt, rTxt) = (lTxt <> T.replicate (lLen - T.length lTxt) " ", T.replicate (rLen - T.length rTxt) " " <> rTxt)
+
+printParts :: MonadIO m => [[(T.Text, T.Text)]] -> m ()
+printParts = liftIO . traverse_ T.putStrLn . fmap (mconcat . fmap (uncurry (<>)))
