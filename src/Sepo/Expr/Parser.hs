@@ -239,9 +239,10 @@ prefixes = prefixBuild $ execWriter $ do
 		notFollowedBy $ satisfy isWordChar
 		fmap (ECmd . compoundSequence) $ ws *> compound
 	do
+		let isPathEndChar c = isSpace c || c == ')'
 		let doPath prefix = do
-			parts <- many $ takeWhile1P (Just "path") (\c -> not (isSpace c) || c == '"' || c == '\'') <|> quoted
-			notFollowedBy $ satisfy $ \c -> not (isSpace c) || c == '"' || c == '\''
+			parts <- many $ takeWhile1P (Just "path") (\c -> not $ isPathEndChar c || c == '"' || c == '\'') <|> quoted
+			notFollowedBy $ satisfy $ \c -> not $ isPathEndChar c
 			pure $ EField $ flip FieldAccess [] $ File $ mconcat $ fmap T.unpack (prefix:parts)
 		tell $ pure $ (["./"],) $ PrefixEntry "relative path" True $ doPath "./"
 		tell $ pure $ (["/"],) $ PrefixEntry "relative path" True $ doPath "/"

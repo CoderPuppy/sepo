@@ -66,7 +66,7 @@ start queryCtx = do
 				txt <- liftIO $ T.readFile aliasesPath
 				let
 					p = fmap M.fromList $ many $
-						(,) <$> f <* Parser.ws <* MP.chunk "=" <* Parser.ws <*> fmap Parser.exprCmd Parser.expr <* Parser.ws <* MP.single ';' <* Parser.ws
+						(,) <$> f <* Parser.ws <* MP.chunk "=" <* Parser.ws <*> fmap Parser.exprCmd Parser.expr <* Parser.ws
 					f
 						=   MP.chunk "spotify:playlist:" *> fmap Left (MP.takeWhileP (Just "playlist id") isAlphaNum)
 						<|> MP.chunk "_" *> fmap Right Parser.quoted
