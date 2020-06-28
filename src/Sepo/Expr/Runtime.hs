@@ -287,8 +287,12 @@ compileFilter ctx stack (Subtract a b) = do
 	((af, av), a') <- compileFilter ctx stack a
 	((bf, bv), b') <- compileFilter ctx stack b
 	pure ((Filter.union af bf, fmap (flip Filter.vSubtract bf) av), Subtract <$> a' <*> b')
-compileFilter ctx stack (Unique cmd) = fmap (second $ fmap Unique) $ compileFilter ctx stack cmd
-compileFilter ctx stack (Shuffle cmd) = fmap (second $ fmap Shuffle) $ compileFilter ctx stack cmd
+compileFilter ctx stack (Unique cmd) = do
+	((filter, val), cmd') <- compileFilter ctx stack cmd
+	pure ((filter, fmap vUnique val), fmap Unique cmd')
+compileFilter ctx stack (Shuffle cmd) = do
+	((filter, val), cmd') <- compileFilter ctx stack cmd
+	pure ((filter, fail "TODO: shuffle"), fmap Shuffle cmd')
 compileFilter ctx stack (Expand cmd) = do
 	((filter, val), cmd') <- compileFilter ctx stack cmd
 	pure $ ((filter, val),) $ do
