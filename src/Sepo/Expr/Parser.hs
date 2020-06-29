@@ -223,10 +223,10 @@ prefixes = prefixBuild $ execWriter $ do
 		ar_id <- takeWhile1P (Just "artist id") isAlphaNum
 		notFollowedBy $ satisfy isWordChar
 		pure $ ECmd $ ArtistId ar_id
-	tell $ pure $ (["playing", "current"],) $ PrefixEntry "playing" False $ do
+	tell $ pure $ (["playing", "current", "this"],) $ PrefixEntry "playing" False $ do
 		notFollowedBy $ satisfy isWordChar
 		pure $ EField $ FieldAccess Playing []
-	tell $ pure $ (["playing_song", "current_song"],) $ PrefixEntry "playing song" False $ do
+	tell $ pure $ (((<>) <$> ["playing_", "current_", "this_"] <*> ["song", "track"]),) $ PrefixEntry "playing song" False $ do
 		notFollowedBy $ satisfy isWordChar
 		pure $ ECmd PlayingSong
 	tell $ pure $ (["empty", "ε", "ø"],) $ PrefixEntry "empty" False $ do
