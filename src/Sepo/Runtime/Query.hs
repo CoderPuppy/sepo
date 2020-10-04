@@ -245,7 +245,7 @@ fetch ctx ss = do
 exec :: (MonadIO m, MonadFail m) => Ctx -> Source a -> m (m (), m a)
 exec ctx SCurrentUser = pure $ (pure (),) $ fmap HTTP.userId $ HTTP.run_ (ctxHTTP ctx) HTTP.getUser
 exec ctx SCurrentUserPlaylists = pure $ (pure (),) $ fmap (fmap httpPlaylistS) $
-	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getPlaylists client
+	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged (HTTP.getPlaylists client) (Just 50)
 exec ctx (SPlaylist pid) = do
 	tracksVar <-
 		(fmap (DM.member $ SPlaylistTracks pid) (readIORef $ ctxCache ctx) >>=) $
@@ -264,12 +264,12 @@ exec ctx (SPlaylistTracks pid) = do
 	pure $ (void playlist,) $
 		fmap (fmap $ httpTrack . HTTP.playlistTrack &&& HTTP.playlistTrackAddedAt) $
 		-- fallback to full get
-		(maybe (HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getPlaylistTracks client pid) pure =<<) $
+		(maybe (HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged (HTTP.getPlaylistTracks client pid) (Just 100)) pure =<<) $
 		runMaybeT $ do
 			atomicModifyIORef (ctxPlaylistTracksCache ctx) $ (, ()) . M.delete pid
 			paging <- MaybeT $ pure paging
 			paging <- takeMVar paging
-			HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPagedContinue (HTTP.getPlaylistTracks client pid) paging
+			HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPagedContinue (HTTP.getPlaylistTracks client pid) (Just 100) paging
 exec ctx SCurrentlyPlaying = pure $ (pure (),) $ do
 	res <- HTTP.run (ctxHTTP ctx) HTTP.getCurrentlyPlaying
 	res <- case res of
@@ -288,16 +288,16 @@ exec ctx (SAlbumTracks aid) = do
 	paging <- fmap (M.lookup aid) (readIORef $ ctxAlbumTracksCache ctx)
 	let tracks =
 		-- fallback to full get
-		(maybe (HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getAlbumTracks client aid) pure =<<) $
+		(maybe (HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged (HTTP.getAlbumTracks client aid) (Just 50)) pure =<<) $
 		runMaybeT $ do
 			atomicModifyIORef (ctxAlbumTracksCache ctx) $ (, ()) . M.delete aid
 			paging <- MaybeT $ pure paging
 			paging <- MaybeT $ takeMVar paging
-			HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPagedContinue (HTTP.getAlbumTracks client aid) paging
+			HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPagedContinue (HTTP.getAlbumTracks client aid) (Just 50) paging
 	pure $ (pure (),) $ (fmap . httpTrackS) <$> readMVar album <*> tracks
 exec ctx (SArtist aid) = fail "BROKEN: SArtist should be prefetched"
 exec ctx (SArtistAlbums aid) = pure $ (pure (),) $ fmap (fmap httpAlbumS) $
-	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged $ HTTP.getArtistAlbums client aid
+	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged (HTTP.getArtistAlbums client aid) (Just 50)
 
 dispatch :: forall m a. (MonadIO m, MonadFail m) => Ctx -> Source a -> m (m a)
 dispatch ctx s = fmap (DM.lookup s) (readIORef $ ctxCache ctx) >>= \case

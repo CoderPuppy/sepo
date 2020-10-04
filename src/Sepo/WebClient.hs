@@ -237,23 +237,23 @@ makeClient token = Client {..}
 spotifyAPI :: Proxy SpotifyAPI
 spotifyAPI = Proxy
 
-getAllPaged_1 :: PagedFn a -> Paging a -> [a] -> ClientM [a]
-getAllPaged_1 fn paging items =
+getAllPaged_1 :: PagedFn a -> Maybe Int -> Paging a -> [a] -> ClientM [a]
+getAllPaged_1 fn limit paging items =
 	if isJust $ pagingNext paging
-	then getAllPaged_2 fn (pagingOffset paging + pagingLimit paging) items'
+	then getAllPaged_2 fn limit (pagingOffset paging + pagingLimit paging) items'
 	else pure $ reverse items'
 	where items' = reverse (pagingItems paging) ++ items
 
-getAllPaged_2 :: PagedFn a -> Int -> [a] -> ClientM [a]
-getAllPaged_2 fn offset items = do
-	paging <- fn (Just offset) Nothing
-	getAllPaged_1 fn paging items
+getAllPaged_2 :: PagedFn a -> Maybe Int -> Int -> [a] -> ClientM [a]
+getAllPaged_2 fn limit offset items = do
+	paging <- fn (Just offset) limit
+	getAllPaged_1 fn limit paging items
 
-getAllPaged :: PagedFn a -> ClientM [a]
-getAllPaged fn = getAllPaged_2 fn 0 []
+getAllPaged :: PagedFn a -> Maybe Int -> ClientM [a]
+getAllPaged fn limit= getAllPaged_2 fn limit 0 []
 
-getAllPagedContinue :: PagedFn a -> Paging a -> ClientM [a]
-getAllPagedContinue fn paging = getAllPaged_1 fn paging []
+getAllPagedContinue :: PagedFn a -> Maybe Int -> Paging a -> ClientM [a]
+getAllPagedContinue fn limit paging = getAllPaged_1 fn limit paging []
 
 data Paging a = Paging {
 	pagingHref :: T.Text,
