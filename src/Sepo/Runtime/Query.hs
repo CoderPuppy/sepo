@@ -116,13 +116,15 @@ start ctxCachePath = do
 	pure $ Ctx {..}
 
 cacheGet :: MonadIO m => Ctx -> Source a -> m (Maybe a)
-cacheGet ctx s = (readIORef (ctxUseFSCache ctx) >>=) $ bool (pure Nothing) $ runFraxl (FSCache.fetch_ (ctxCachePath ctx, ctxFSCache ctx)) $  dataFetch $ FSCache.CacheSource s
+cacheGet ctx s = (readIORef (ctxUseFSCache ctx) >>=) $ bool (pure Nothing) $
+	runFraxl (FSCache.fetch_ (ctxCachePath ctx, ctxFSCache ctx)) $  dataFetch $ FSCache.CacheSource s
 
 finalize :: forall m a. MonadIO m => Ctx -> MVar a -> Source a -> a -> Bool -> m ()
 finalize ctx var s res cached = do
 	putMVar var res
 	others <- DM.traverseWithKey (const $ newMVar . runIdentity) (srcAll s res)
 	others' <- atomicModifyIORef (ctxCache ctx) $ \cache -> (DM.union cache others, DM.difference others cache)
+	-- add new items to the FS cache if the data didn't come from the FS cache
 	when (not cached) $ do
 		cache <- readIORef $ ctxCache ctx
 		let
@@ -151,7 +153,7 @@ fetch ctx ss = do
 		vars <- for aids $ \_ -> newEmptyMVar
 		tracksVars <- for aids $ \aid -> if DM.member (SAlbumTracks aid) cache then pure Nothing else fmap Just newEmptyMVar
 		modifyIORef (ctxCache ctx) $ flip (foldl $ flip $ uncurry $ DM.insert . SAlbum) (zip aids vars)
-		modifyIORef (ctxAlbumTracksCache ctx) $ flip (foldl $ flip $ uncurry $ (fromMaybe id .) . fmap . M.insert) (zip aids tracksVars)
+		modifyIORef (ctxAlbumTracksCache ctx) $ flip (foldl $ flip $ uncurry $ maybe id . M.insert) (zip aids tracksVars)
 		pure $ do
 			cacheAsyncs <- fmap S.fromList $ for (zip aids (zip vars tracksVars)) $ \spec@(aid, _) ->
 				async $ fmap (spec,) $ cacheGet ctx $ SAlbum aid
