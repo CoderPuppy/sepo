@@ -192,6 +192,10 @@ type SpotifyAPI = Header' '[Required, Strict] "Authorization" T.Text :>
 
 	:<|> "me" :> "player" :> Get '[JSON] CurrentlyPlaying
 	:<|> "me" :> "player" :> "play" :> ReqBody '[JSON] Play :> Put '[JSON] ()
+
+	:<|> "search" :> QueryParam' '[Required, Strict] "type" SearchTypeArtist :> QueryParam' '[Required, Strict] "q" T.Text :> QueryParam "offset" Int :> QueryParam "limit" Int :> Get '[JSON] SearchArtists
+	:<|> "search" :> QueryParam' '[Required, Strict] "type" SearchTypeAlbum :> QueryParam' '[Required, Strict] "q" T.Text :> QueryParam "offset" Int :> QueryParam "limit" Int :> Get '[JSON] SearchAlbums
+	:<|> "search" :> QueryParam' '[Required, Strict] "type" SearchTypeTrack :> QueryParam' '[Required, Strict] "q" T.Text :> QueryParam "offset" Int :> QueryParam "limit" Int :> Get '[JSON] SearchTracks
 	)
 
 data Client = Client {
@@ -221,7 +225,11 @@ data Client = Client {
 	replaceTracks :: T.Text -> ReplaceTracks -> ClientM SnapshotResp,
 
 	getCurrentlyPlaying :: ClientM CurrentlyPlaying,
-	play :: Play -> ClientM () -- requires premium
+	play :: Play -> ClientM (), -- requires premium
+
+	searchArtists :: SearchTypeArtist -> T.Text -> Maybe Int -> Maybe Int -> ClientM SearchArtists,
+	searchAlbums :: SearchTypeAlbum -> T.Text -> Maybe Int -> Maybe Int -> ClientM SearchAlbums,
+	searchTracks :: SearchTypeTrack -> T.Text -> Maybe Int -> Maybe Int -> ClientM SearchTracks
 }
 
 makeClient token = Client {..}
@@ -232,7 +240,8 @@ makeClient token = Client {..}
 		getTrack :<|> getTracks :<|>
 		createPlaylist :<|> changePlaylistDetails :<|>
 		addTracks :<|> removeTracks :<|> reorderTracks :<|> replaceTracks :<|>
-		getCurrentlyPlaying :<|> play = client spotifyAPI $ "Bearer " <> token
+		getCurrentlyPlaying :<|> play :<|>
+		searchArtists :<|> searchAlbums :<|> searchTracks = client spotifyAPI $ "Bearer " <> token
 
 spotifyAPI :: Proxy SpotifyAPI
 spotifyAPI = Proxy
@@ -755,3 +764,20 @@ instance FromJSON TrackS where
 		<*> o .: "preview_url"
 		<*> o .: "track_number"
 		<*> o .: "uri"
+
+data SearchTypeArtist = SearchTypeArtist
+instance ToHttpApiData SearchTypeArtist where toQueryParam SearchTypeArtist = "artist"
+data SearchTypeAlbum = SearchTypeAlbum
+instance ToHttpApiData SearchTypeAlbum where toQueryParam SearchTypeAlbum = "album"
+data SearchTypeTrack = SearchTypeTrack
+instance ToHttpApiData SearchTypeTrack where toQueryParam SearchTypeTrack = "track"
+
+newtype SearchArtists = SearchArtists { unSearchArtists :: Paging ArtistS }
+instance FromJSON SearchArtists where
+	parseJSON = withObject "SearchArtists" $ \o -> SearchArtists <$> o.: "artists"
+newtype SearchAlbums = SearchAlbums { unSearchAlbums :: Paging Album }
+instance FromJSON SearchAlbums where
+	parseJSON = withObject "SearchAlbums" $ \o -> SearchAlbums <$> o.: "albums"
+newtype SearchTracks = SearchTracks { unSearchTracks :: Paging Track }
+instance FromJSON SearchTracks where
+	parseJSON = withObject "SearchTracks" $ \o -> SearchTracks <$> o.: "tracks"
