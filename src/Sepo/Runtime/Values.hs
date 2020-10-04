@@ -126,9 +126,9 @@ data Source a where
 	SAlbumTracks :: T.Text -> Source [Track]
 	SArtist :: T.Text -> Source Artist
 	SArtistAlbums :: T.Text -> Source [Album]
-	SSearchArtists :: T.Text -> Source [Artist]
-	SSearchAlbums :: T.Text -> Source [Album]
-	SSearchTracks :: T.Text -> Source [Track]
+	SSearchArtists :: T.Text -> Int -> Source (Bool, [Artist])
+	SSearchAlbums :: T.Text -> Int -> Source (Bool, [Album])
+	SSearchTracks :: T.Text -> Int -> Source (Bool, [Track])
 deriving instance Show (Source a)
 instance GEq Source where
 	SCurrentUser `geq` SCurrentUser = Just Refl
@@ -141,9 +141,9 @@ instance GEq Source where
 	SAlbumTracks a `geq` SAlbumTracks b = bool (Just Refl) Nothing $ a == b
 	SArtist a `geq` SArtist b = bool (Just Refl) Nothing $ a == b
 	SArtistAlbums a `geq` SArtistAlbums b = bool (Just Refl) Nothing $ a == b
-	SSearchArtists a `geq` SSearchArtists b = bool (Just Refl) Nothing $ a == b
-	SSearchAlbums a `geq` SSearchAlbums b = bool (Just Refl) Nothing $ a == b
-	SSearchTracks a `geq` SSearchTracks b = bool (Just Refl) Nothing $ a == b
+	SSearchArtists aq ai `geq` SSearchArtists bq bi = bool (Just Refl) Nothing $ (aq, ai) == (bq, bi)
+	SSearchAlbums aq ai `geq` SSearchAlbums bq bi = bool (Just Refl) Nothing $ (aq, ai) == (bq, bi)
+	SSearchTracks aq ai `geq` SSearchTracks bq bi = bool (Just Refl) Nothing $ (aq, ai) == (bq, bi)
 	_ `geq` _ = Nothing
 instance GCompare Source where
 	SCurrentUser `gcompare` SCurrentUser = GEQ
@@ -232,54 +232,54 @@ instance GCompare Source where
 		EQ -> GEQ
 		GT -> GGT
 	SArtistAlbums _ `gcompare` _ = GLT
-	SSearchArtists _ `gcompare` SCurrentUser = GGT
-	SSearchArtists _ `gcompare` SCurrentUserPlaylists = GGT
-	SSearchArtists _ `gcompare` SPlaylist _ = GGT
-	SSearchArtists _ `gcompare` SPlaylistTracks _ = GGT
-	SSearchArtists _ `gcompare` SCurrentlyPlaying = GGT
-	SSearchArtists _ `gcompare` STrack _ = GGT
-	SSearchArtists _ `gcompare` SAlbum _ = GGT
-	SSearchArtists _ `gcompare` SAlbumTracks _ = GGT
-	SSearchArtists _ `gcompare` SArtist _ = GGT
-	SSearchArtists _ `gcompare` SArtistAlbums _ = GGT
-	SSearchArtists a `gcompare` SSearchArtists b = case compare a b of
+	SSearchArtists _ _ `gcompare` SCurrentUser = GGT
+	SSearchArtists _ _ `gcompare` SCurrentUserPlaylists = GGT
+	SSearchArtists _ _ `gcompare` SPlaylist _ = GGT
+	SSearchArtists _ _ `gcompare` SPlaylistTracks _ = GGT
+	SSearchArtists _ _ `gcompare` SCurrentlyPlaying = GGT
+	SSearchArtists _ _ `gcompare` STrack _ = GGT
+	SSearchArtists _ _ `gcompare` SAlbum _ = GGT
+	SSearchArtists _ _ `gcompare` SAlbumTracks _ = GGT
+	SSearchArtists _ _ `gcompare` SArtist _ = GGT
+	SSearchArtists _ _ `gcompare` SArtistAlbums _ = GGT
+	SSearchArtists aq ai `gcompare` SSearchArtists bq bi = case compare (aq, ai) (bq, bi) of
 		LT -> GLT
 		EQ -> GEQ
 		GT -> GGT
-	SSearchArtists _ `gcompare` _ = GLT
-	SSearchAlbums _ `gcompare` SCurrentUser = GGT
-	SSearchAlbums _ `gcompare` SCurrentUserPlaylists = GGT
-	SSearchAlbums _ `gcompare` SPlaylist _ = GGT
-	SSearchAlbums _ `gcompare` SPlaylistTracks _ = GGT
-	SSearchAlbums _ `gcompare` SCurrentlyPlaying = GGT
-	SSearchAlbums _ `gcompare` STrack _ = GGT
-	SSearchAlbums _ `gcompare` SAlbum _ = GGT
-	SSearchAlbums _ `gcompare` SAlbumTracks _ = GGT
-	SSearchAlbums _ `gcompare` SArtist _ = GGT
-	SSearchAlbums _ `gcompare` SArtistAlbums _ = GGT
-	SSearchAlbums _ `gcompare` SSearchArtists _ = GGT
-	SSearchAlbums a `gcompare` SSearchAlbums b = case compare a b of
+	SSearchArtists _ _ `gcompare` _ = GLT
+	SSearchAlbums _ _ `gcompare` SCurrentUser = GGT
+	SSearchAlbums _ _ `gcompare` SCurrentUserPlaylists = GGT
+	SSearchAlbums _ _ `gcompare` SPlaylist _ = GGT
+	SSearchAlbums _ _ `gcompare` SPlaylistTracks _ = GGT
+	SSearchAlbums _ _ `gcompare` SCurrentlyPlaying = GGT
+	SSearchAlbums _ _ `gcompare` STrack _ = GGT
+	SSearchAlbums _ _ `gcompare` SAlbum _ = GGT
+	SSearchAlbums _ _ `gcompare` SAlbumTracks _ = GGT
+	SSearchAlbums _ _ `gcompare` SArtist _ = GGT
+	SSearchAlbums _ _ `gcompare` SArtistAlbums _ = GGT
+	SSearchAlbums _ _ `gcompare` SSearchArtists _ _ = GGT
+	SSearchAlbums aq ai `gcompare` SSearchAlbums bq bi = case compare (aq, ai) (bq, bi) of
 		LT -> GLT
 		EQ -> GEQ
 		GT -> GGT
-	SSearchAlbums _ `gcompare` _ = GLT
-	SSearchTracks _ `gcompare` SCurrentUser = GGT
-	SSearchTracks _ `gcompare` SCurrentUserPlaylists = GGT
-	SSearchTracks _ `gcompare` SPlaylist _ = GGT
-	SSearchTracks _ `gcompare` SPlaylistTracks _ = GGT
-	SSearchTracks _ `gcompare` SCurrentlyPlaying = GGT
-	SSearchTracks _ `gcompare` STrack _ = GGT
-	SSearchTracks _ `gcompare` SAlbum _ = GGT
-	SSearchTracks _ `gcompare` SAlbumTracks _ = GGT
-	SSearchTracks _ `gcompare` SArtist _ = GGT
-	SSearchTracks _ `gcompare` SArtistAlbums _ = GGT
-	SSearchTracks _ `gcompare` SSearchArtists _ = GGT
-	SSearchTracks _ `gcompare` SSearchAlbums _ = GGT
-	SSearchTracks a `gcompare` SSearchTracks b = case compare a b of
+	SSearchAlbums _ _ `gcompare` _ = GLT
+	SSearchTracks _ _ `gcompare` SCurrentUser = GGT
+	SSearchTracks _ _ `gcompare` SCurrentUserPlaylists = GGT
+	SSearchTracks _ _ `gcompare` SPlaylist _ = GGT
+	SSearchTracks _ _ `gcompare` SPlaylistTracks _ = GGT
+	SSearchTracks _ _ `gcompare` SCurrentlyPlaying = GGT
+	SSearchTracks _ _ `gcompare` STrack _ = GGT
+	SSearchTracks _ _ `gcompare` SAlbum _ = GGT
+	SSearchTracks _ _ `gcompare` SAlbumTracks _ = GGT
+	SSearchTracks _ _ `gcompare` SArtist _ = GGT
+	SSearchTracks _ _ `gcompare` SArtistAlbums _ = GGT
+	SSearchTracks _ _ `gcompare` SSearchArtists _ _ = GGT
+	SSearchTracks _ _ `gcompare` SSearchAlbums _ _ = GGT
+	SSearchTracks aq ai `gcompare` SSearchTracks bq bi = case compare (aq, ai) (bq, bi) of
 		LT -> GLT
 		EQ -> GEQ
 		GT -> GGT
-	-- SSearchTracks _ `gcompare` _ = GLT
+	-- SSearchTracks _ _ `gcompare` _ = GLT
 	-- a `gcompare` b = error $ show (a, b)
 
 data Action a where

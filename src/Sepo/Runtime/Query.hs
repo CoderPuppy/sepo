@@ -25,7 +25,7 @@ import Data.Foldable
 import Data.Functor.Identity
 import Data.Functor.Identity (Identity(runIdentity))
 import Data.List.Split (chunksOf)
-import Data.Maybe (fromMaybe, fromJust, isNothing)
+import Data.Maybe (fromMaybe, fromJust, isNothing, isJust)
 import Data.Traversable (for)
 import Network.HTTP.Types.Status (noContent204)
 import Servant.Client (ClientError(UnsupportedContentType), responseStatusCode)
@@ -82,9 +82,9 @@ srcOthers s v = case (s, v) of
 	(SAlbumTracks aid, trs) -> DM.unions $ fmap (\tr -> srcAll (STrack $ trackId tr) tr) trs
 	(SArtist aid, _) -> DM.empty
 	(SArtistAlbums aid, als) -> DM.unions $ fmap (\al -> srcAll (SAlbum $ albumId al) al) als
-	(SSearchArtists q, ars) -> DM.unions $ fmap (\ar -> srcAll (SArtist $ artistId ar) ar) ars
-	(SSearchAlbums q, als) -> DM.unions $ fmap (\al -> srcAll (SAlbum $ albumId al) al) als
-	(SSearchTracks q, trs) -> DM.unions $ fmap (\tr -> srcAll (STrack $ trackId tr) tr) trs
+	(SSearchArtists q i, (more, ars)) -> DM.unions $ fmap (\ar -> srcAll (SArtist $ artistId ar) ar) ars
+	(SSearchAlbums q i, (more, als)) -> DM.unions $ fmap (\al -> srcAll (SAlbum $ albumId al) al) als
+	(SSearchTracks q i, (more, trs)) -> DM.unions $ fmap (\tr -> srcAll (STrack $ trackId tr) tr) trs
 
 srcAll :: Source a -> a -> DM.DMap Source Identity
 srcAll s v = DM.insert s (Identity v) $ srcOthers s v
@@ -301,12 +301,12 @@ exec ctx (SAlbumTracks aid) = do
 exec ctx (SArtist aid) = fail "BROKEN: SArtist should be prefetched"
 exec ctx (SArtistAlbums aid) = pure $ (pure (),) $ fmap (fmap httpAlbumS) $
 	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged (HTTP.getArtistAlbums client aid) (Just 50)
-exec ctx (SSearchArtists q) = pure $ (pure (),) $ fmap (fmap httpArtistS . HTTP.pagingItems . HTTP.unSearchArtists) $
-	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.searchArtists client HTTP.SearchTypeArtist q (Just 0) (Just 50)
-exec ctx (SSearchAlbums q) = pure $ (pure (),) $ fmap (fmap httpAlbum . HTTP.pagingItems . HTTP.unSearchAlbums) $
-	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.searchAlbums client HTTP.SearchTypeAlbum q (Just 0) (Just 50)
-exec ctx (SSearchTracks q) = pure $ (pure (),) $ fmap (fmap httpTrack . HTTP.pagingItems . HTTP.unSearchTracks) $
-	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.searchTracks client HTTP.SearchTypeTrack q (Just 0) (Just 50)
+exec ctx (SSearchArtists q i) = pure $ (pure (),) $ fmap ((isJust . HTTP.pagingNext &&& fmap httpArtistS . HTTP.pagingItems) . HTTP.unSearchArtists) $
+	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.searchArtists client HTTP.SearchTypeArtist q (Just $ i * 50) (Just 50)
+exec ctx (SSearchAlbums q i) = pure $ (pure (),) $ fmap ((isJust . HTTP.pagingNext &&& fmap httpAlbum . HTTP.pagingItems) . HTTP.unSearchAlbums) $
+	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.searchAlbums client HTTP.SearchTypeAlbum q (Just $ i * 50) (Just 50)
+exec ctx (SSearchTracks q i) = pure $ (pure (),) $ fmap ((isJust . HTTP.pagingNext &&& fmap httpTrack . HTTP.pagingItems) . HTTP.unSearchTracks) $
+	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.searchTracks client HTTP.SearchTypeTrack q (Just $ i * 50) (Just 50)
 
 dispatch :: forall m a. (MonadIO m, MonadFail m) => Ctx -> Source a -> m (m a)
 dispatch ctx s = fmap (DM.lookup s) (readIORef $ ctxCache ctx) >>= \case

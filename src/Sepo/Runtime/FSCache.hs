@@ -193,9 +193,9 @@ cachePlace (SArtist aid) = Just $ CachePlace {
 		cpDecode = const $ pure . Aeson.decodeStrict
 	}
 cachePlace (SArtistAlbums _) = Nothing
-cachePlace (SSearchArtists _) = Nothing
-cachePlace (SSearchAlbums _) = Nothing
-cachePlace (SSearchTracks _) = Nothing
+cachePlace (SSearchArtists _ _) = Nothing
+cachePlace (SSearchAlbums _ _) = Nothing
+cachePlace (SSearchTracks _ _) = Nothing
 
 entriesConduit :: (MonadIO m, Conduit.MonadResource m) => FilePath -> Conduit.ConduitT i (DSum Source (Const FilePath)) m ()
 entriesConduit cachePath = do
