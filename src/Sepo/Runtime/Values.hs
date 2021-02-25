@@ -94,14 +94,12 @@ data Value m = Value {
 }
 
 vEmpty :: Applicative m => Value m
-vEmpty = Value (pure $ Unordered M.empty) Nothing
+vEmpty = Value (pure $ Ordered []) Nothing
 
 vConcat :: Applicative m => Value m -> Value m -> Value m
 vConcat a b = flip Value Nothing $ flip fmap ((,) <$> tracks a <*> tracks b) $ \case
 	(Ordered a, Ordered b) -> Ordered $ a ++ b
-	(Ordered a, Unordered b) -> Ordered $ a ++ msToL b
-	(Unordered a, Ordered b) -> Ordered $ msToL a ++ b
-	(Unordered a, Unordered b) -> Unordered $ M.unionWith (+) a b
+	(a, b) -> Unordered $ M.unionWith (+) (tracksSet a) (tracksSet b)
 
 vUnique :: Functor m => Value m -> Value m
 vUnique = flip Value Nothing . fmap (Unordered . M.map (const 1) . tracksSet) . tracks
