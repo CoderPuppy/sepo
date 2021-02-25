@@ -41,6 +41,7 @@ These let you change a collection of tracks (e.g. remove all duplicates) or comb
 - Sort by track name - `sort_track`, `sortTrack`, `sort_t`, `sort_tr`, `str`, `st`
 - Sort by album name - `sort_album`, `sortAlbum`, `sort_al`, `sal`
 - Sort by artist names - `sort_artist`, `sortArtist`, `sort_ar`, `sar`
+- Forget order - `unorder`, `unordered`
 
 Example: `sort_artist sort_album unique 'All Time Low'`
 

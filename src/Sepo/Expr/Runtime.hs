@@ -252,6 +252,9 @@ executeCmd ctx stack (SortAlbum cmd) = do
 executeCmd ctx stack (SortArtist cmd) = do
 	(val, cmd') <- executeCmd ctx stack cmd
 	pure (vSortArtist val, fmap SortArtist cmd')
+executeCmd ctx stack (Unorder cmd) = do
+	(val, cmd') <- executeCmd ctx stack cmd
+	pure (Value (fmap (Unordered . tracksSet) $ tracks val) Nothing, fmap SortArtist cmd')
 
 compileFilter :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Stack -> Cmd -> m ((Filter.Filter, m (Value m)), m Cmd)
 compileFilter ctx stack (Field (FieldAccess f@(AliasName name) [])) = do

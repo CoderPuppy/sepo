@@ -36,6 +36,7 @@ data Cmd
 	| SortTrack Cmd
 	| SortAlbum Cmd
 	| SortArtist Cmd
+	| Unorder Cmd
 	deriving (Show)
 
 assign :: FieldAccess -> Cmd -> FieldAccess
@@ -113,3 +114,4 @@ instance Reify Cmd where
 	reify d (SortTrack a) = parens (d > PPrefix) $ "sort_track " <> reify PPrefix a
 	reify d (SortAlbum a) = parens (d > PPrefix) $ "sort_album " <> reify PPrefix a
 	reify d (SortArtist a) = parens (d > PPrefix) $ "sort_artist " <> reify PPrefix a
+	reify d (Unorder a) = parens (d > PPrefix) $ "unorder " <> reify PPrefix a
