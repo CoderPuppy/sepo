@@ -23,6 +23,7 @@ data Cmd
 	| AlbumId T.Text
 	| ArtistId T.Text
 	| PlayingSong
+	| MyPlaylists
 	| Empty
 	| Seq Cmd Cmd
 	| RevSeq Cmd Cmd
@@ -99,6 +100,7 @@ instance Reify Cmd where
 	reify d (AlbumId al_id) = "spotify:album:" <> al_id
 	reify d (ArtistId ar_id) = "spotify:artist:" <> ar_id
 	reify d PlayingSong = "playing_song"
+	reify d MyPlaylists = "my_playlists"
 	reify d Empty = "empty"
 	reify d (Seq a b) = parens (d > PSeq) $ reify PSeq a <> " *> " <> reify PSeq b
 	reify d (RevSeq a b) = parens (d > PSeq) $ reify PSeq a <> " <* " <> reify PSeq b

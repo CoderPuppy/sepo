@@ -229,6 +229,9 @@ prefixes = prefixBuild $ execWriter $ do
 	tell $ pure $ (((<>) <$> ["playing_", "current_", "this_"] <*> ["song", "track"]),) $ PrefixEntry "playing song" False $ do
 		notFollowedBy $ satisfy isWordChar
 		pure $ ECmd PlayingSong
+	tell $ pure $ (["my_playlists", "playlists"],) $ PrefixEntry "my playlists" False $ do
+		notFollowedBy $ satisfy isWordChar
+		pure $ ECmd MyPlaylists
 	tell $ pure $ (["empty", "ε", "ø"],) $ PrefixEntry "empty" False $ do
 		notFollowedBy $ satisfy isWordChar
 		pure $ ECmd Empty

@@ -20,6 +20,7 @@ These are where you get collections of tracks.
 	shorter variants: `ar:`, `artist:`
 - The currently playing "context" (playlist, album or artist) - `playing`, `current`, `this`
 - The currently playing track - `playing_song`, `current_song`, `this_song`, `playing_track`, `current_track`, `this_track`
+- All of the user's playlists - `my_playlists`, `playlists`
 - An alias - quoted or unquoted
 	e.g. `_stdin`, `_"Bowling for Soup"`
 	TODO

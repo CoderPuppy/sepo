@@ -211,6 +211,10 @@ executeCmd ctx stack PlayingSong =
 				tracks = pure $ Ordered [track],
 				existing = Nothing
 			}
+executeCmd ctx stack MyPlaylists = do
+	pls <- Query.dataFetch SCurrentUserPlaylists
+	(v, _) <- executeCmd ctx stack $ foldr Concat Empty $ fmap (Field . flip FieldAccess [] . PlaylistId . playlistId) $ pls
+	pure (v, pure MyPlaylists)
 executeCmd ctx stack Empty = pure (vEmpty, pure Empty)
 executeCmd ctx stack (Seq a b) = do
 	(_, a') <- executeCmd ctx stack a
