@@ -284,6 +284,7 @@ data Action a where
 	APlaylistCreate :: HTTP.CreatePlaylist -> Action Playlist
 	APlaylistReplace :: T.Text -> [Track] -> Action Playlist
 	APlaylistAdd :: T.Text -> Maybe Int -> [Track] -> Action Playlist
+	APlaylistRemove :: T.Text -> Maybe T.Text -> M.Map Track (Maybe [Int]) -> Action Playlist
 
 tracksList :: Tracks -> [Track]
 tracksList (Ordered tracks) = tracks

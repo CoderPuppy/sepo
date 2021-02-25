@@ -351,3 +351,13 @@ apply ctx (APlaylistAdd pid place tracks) = do
 	-- TODO: can this be a put
 	evict ctx $ SPlaylistTracks $ playlistId pl
 	pure pl
+apply ctx (APlaylistRemove pid snap_id tracks) = do
+	pl <- run ctx $ dataFetch $ SPlaylist pid
+	snapshotId <- fmap HTTP.snapshotRespId $ HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.removeTracks client pid $
+		flip HTTP.RemoveTracks snap_id $ flip fmap (M.toList tracks) $ \(track, idxs) ->
+			HTTP.RemoveTrack ("spotify:track:" <> trackId track) idxs
+	pl <- pure $ pl { playlistSnapshotId = snapshotId }
+	put ctx (SPlaylist $ playlistId pl) pl
+	-- TODO: can this be a put
+	evict ctx $ SPlaylistTracks $ playlistId pl
+	pure pl
