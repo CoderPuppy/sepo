@@ -370,3 +370,11 @@ apply ctx (APlaylistRemove pid snap_id tracks) = do
 	-- TODO: can this be a put
 	evict ctx $ SPlaylistTracks $ playlistId pl
 	pure pl
+apply ctx (ASaveTracks tracks) = do
+	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.saveTracks client $ HTTP.TrackIds $ fmap trackId tracks
+	evict ctx SCurrentUserTracks
+	pure ()
+apply ctx (AUnsaveTracks tracks) = do
+	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.unsaveTracks client $ HTTP.TrackIds $ fmap trackId tracks
+	evict ctx SCurrentUserTracks
+	pure ()

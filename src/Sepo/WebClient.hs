@@ -177,8 +177,8 @@ type SpotifyAPI = Header' '[Required, Strict] "Authorization" T.Text :>
 	:<|> "me" :> "following" :> QueryParam' '[Required, Strict] "type" T.Text :> QueryParam "offset" Int :> QueryParam "limit" Int :> Get '[JSON] MyArtists
 	:<|> "me" :> "albums" :> PagedPath SavedAlbum
 	:<|> "me" :> "tracks" :> PagedPath SavedTrack
-	:<|> "me" :> "tracks" :> QueryParam' '[Required, Strict] "ids" TrackIds :> Put '[JSON] ()
-	:<|> "me" :> "tracks" :> QueryParam' '[Required, Strict] "ids" TrackIds :> Delete '[JSON] ()
+	:<|> "me" :> "tracks" :> ReqBody '[JSON] TrackIds :> Put '[JSON] NoContent
+	:<|> "me" :> "tracks" :> ReqBody '[JSON] TrackIds :> Delete '[JSON] NoContent
 
 	:<|> "playlists" :> Capture "playlist_id" T.Text :> Get '[JSON] Playlist
 	:<|> "playlists" :> Capture "playlist_id" T.Text :> "tracks" :> PagedPath PlaylistTrack
@@ -216,8 +216,8 @@ data Client = Client {
 	getMyArtists :: T.Text -> Maybe Int -> Maybe Int -> ClientM MyArtists,
 	getMyAlbums :: PagedFn SavedAlbum,
 	getMyTracks :: PagedFn SavedTrack,
-	saveTracks :: TrackIds -> ClientM (),
-	unsaveTracks :: TrackIds -> ClientM (),
+	saveTracks :: TrackIds -> ClientM NoContent,
+	unsaveTracks :: TrackIds -> ClientM NoContent,
 
 	getPlaylist :: T.Text -> ClientM Playlist,
 	getPlaylistTracks :: T.Text -> PagedFn PlaylistTrack,
@@ -382,6 +382,9 @@ instance FromJSON PlaylistTrack where
 newtype TrackIds = TrackIds { unTrackIds :: [T.Text] } deriving (Show)
 instance ToHttpApiData TrackIds where
 	toQueryParam (TrackIds ids) = T.intercalate "," ids
+instance ToJSON TrackIds where
+	toJSON (TrackIds ids) = object [("ids", toJSON ids)]
+	toEncoding (TrackIds ids) = pairs $ "ids" .= ids
 
 newtype Tracks = Tracks { unTracks :: [Track] } deriving (Show)
 instance FromJSON Tracks where
