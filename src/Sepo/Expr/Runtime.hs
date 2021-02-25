@@ -122,6 +122,10 @@ executeField ctx stack f@(File path) = do
 			cmd <- Parser.handleMode (cmds, comments)
 			(val, _cmd) <- executeCmd ctx stack cmd
 			pure (val, pure $ Field $ FieldAccess f [])
+executeField ctx stack MyTracks =
+	pure $ (, pure $ Field $ FieldAccess MyTracks []) $
+	flip Value Nothing $
+	fmap (Unordered . M.fromList . fmap (second $ const 1)) $ Query.dataFetch SCurrentUserTracks
 
 executeFieldAssignment :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Stack -> Field -> Cmd -> m (Value m, m Cmd)
 executeFieldAssignment ctx stack (PlaylistId pl_id) cmd = do
@@ -182,6 +186,22 @@ executeFieldAssignment ctx stack (File path) cmd = do
 	cmd' <- cmd'
 	liftIO $ T.writeFile path $ reify minBound cmd'
 	pure (val, pure cmd')
+executeFieldAssignment ctx stack MyTracks cmd = do
+	(val, cmd') <- executeCmd ctx stack cmd
+	tracks <- tracks val
+	let new = M.keysSet $ tracksSet tracks
+	existing <- fmap (S.fromList . fmap fst) $ Query.dataFetch SCurrentUserTracks
+	for_ (chunksOf 50 $ S.toList $ S.difference existing new) $ \chunk ->
+		Query.apply (queryCtx ctx) $ AUnsaveTracks chunk
+	for_ (chunksOf 50 $ S.toList $ S.difference new existing) $ \chunk ->
+		Query.apply (queryCtx ctx) $ ASaveTracks chunk
+	-- TODO: save in aliases
+	-- liftIO $ T.appendFile (aliasesPath ctx) $ "my_tracks = " <> reify minBound cmd <> ";\n"
+	-- modifyIORef (aliases ctx) $ M.insert (Left pl_id) cmd
+	pure $ (, cmd') $ Value {
+		tracks = pure tracks,
+		existing = Nothing
+	}
 
 executeCmd :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Stack -> Cmd -> m (Value m, m Cmd)
 executeCmd ctx stack (Field (FieldAccess field [])) = executeField ctx stack field
@@ -232,8 +252,16 @@ executeCmd ctx stack PlayingSong =
 			}
 executeCmd ctx stack MyPlaylists = do
 	pls <- Query.dataFetch SCurrentUserPlaylists
-	(v, _) <- executeCmd ctx stack $ foldr Concat Empty $ fmap (Field . flip FieldAccess [] . PlaylistId . playlistId) $ pls
+	(v, _) <- executeCmd ctx stack $ foldr Concat Empty $ fmap (Field . flip FieldAccess [] . PlaylistId . playlistId) pls
 	pure (v, pure MyPlaylists)
+executeCmd ctx stack MyArtists = do
+	ars <- Query.dataFetch SCurrentUserArtists
+	(v, _) <- executeCmd ctx stack $ foldr Concat Empty $ fmap (ArtistId . artistId) ars
+	pure (v, pure MyArtists)
+executeCmd ctx stack MyAlbums = do
+	als <- Query.dataFetch SCurrentUserAlbums
+	(v, _) <- executeCmd ctx stack $ foldr Concat Empty $ fmap (AlbumId . albumId . fst) als
+	pure (v, pure MyAlbums)
 executeCmd ctx stack Empty = pure (vEmpty, pure Empty)
 executeCmd ctx stack (Seq a b) = do
 	(_, a') <- executeCmd ctx stack a

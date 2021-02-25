@@ -10,6 +10,7 @@ data Field
 	| AliasName T.Text
 	| Playing
 	| File FilePath
+	| MyTracks
 	deriving (Show)
 
 data FieldAccess = FieldAccess {
@@ -24,6 +25,8 @@ data Cmd
 	| ArtistId T.Text
 	| PlayingSong
 	| MyPlaylists
+	| MyArtists
+	| MyAlbums
 	| Empty
 	| Seq Cmd Cmd
 	| RevSeq Cmd Cmd
@@ -89,6 +92,7 @@ instance Reify Field where
 		| Just tail <- T.stripPrefix "./" path' -> "./" <> reifyQuoted tail
 		| otherwise -> "./" <> reifyQuoted path'
 		where path' = T.pack path
+	reify d MyTracks = "my_tracks"
 
 instance Reify FieldAccess where
 	reify d (FieldAccess f []) = reify d f
@@ -102,6 +106,8 @@ instance Reify Cmd where
 	reify d (ArtistId ar_id) = "spotify:artist:" <> ar_id
 	reify d PlayingSong = "playing_song"
 	reify d MyPlaylists = "my_playlists"
+	reify d MyArtists = "my_artists"
+	reify d MyAlbums = "my_albums"
 	reify d Empty = "empty"
 	reify d (Seq a b) = parens (d > PSeq) $ reify PSeq a <> " *> " <> reify PSeq b
 	reify d (RevSeq a b) = parens (d > PSeq) $ reify PSeq a <> " <* " <> reify PSeq b

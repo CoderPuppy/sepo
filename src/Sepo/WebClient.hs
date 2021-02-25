@@ -174,6 +174,11 @@ type PagedFn a = Maybe Int -> Maybe Int -> ClientM (Paging a)
 type SpotifyAPI = Header' '[Required, Strict] "Authorization" T.Text :>
 	(    "me" :> Get '[JSON] User
 	:<|> "me" :> "playlists" :> PagedPath PlaylistS
+	:<|> "me" :> "following" :> QueryParam' '[Required, Strict] "type" T.Text :> QueryParam "offset" Int :> QueryParam "limit" Int :> Get '[JSON] MyArtists
+	:<|> "me" :> "albums" :> PagedPath SavedAlbum
+	:<|> "me" :> "tracks" :> PagedPath SavedTrack
+	:<|> "me" :> "tracks" :> QueryParam' '[Required, Strict] "ids" TrackIds :> Put '[JSON] ()
+	:<|> "me" :> "tracks" :> QueryParam' '[Required, Strict] "ids" TrackIds :> Delete '[JSON] ()
 
 	:<|> "playlists" :> Capture "playlist_id" T.Text :> Get '[JSON] Playlist
 	:<|> "playlists" :> Capture "playlist_id" T.Text :> "tracks" :> PagedPath PlaylistTrack
@@ -207,7 +212,12 @@ type SpotifyAPI = Header' '[Required, Strict] "Authorization" T.Text :>
 
 data Client = Client {
 	getUser :: ClientM User,
-	getPlaylists :: PagedFn PlaylistS,
+	getMyPlaylists :: PagedFn PlaylistS,
+	getMyArtists :: T.Text -> Maybe Int -> Maybe Int -> ClientM MyArtists,
+	getMyAlbums :: PagedFn SavedAlbum,
+	getMyTracks :: PagedFn SavedTrack,
+	saveTracks :: TrackIds -> ClientM (),
+	unsaveTracks :: TrackIds -> ClientM (),
 
 	getPlaylist :: T.Text -> ClientM Playlist,
 	getPlaylistTracks :: T.Text -> PagedFn PlaylistTrack,
@@ -240,7 +250,9 @@ data Client = Client {
 }
 
 makeClient token = Client {..}
-	where getUser :<|> getPlaylists :<|>
+	where getUser :<|> getMyPlaylists :<|>
+		getMyArtists :<|> getMyAlbums :<|>
+		getMyTracks :<|> saveTracks :<|> unsaveTracks :<|>
 		getPlaylist :<|> getPlaylistTracks :<|>
 		getArtist :<|> getArtists :<|> getArtistAlbums :<|>
 		getAlbum :<|> getAlbums :<|> getAlbumTracks :<|>
@@ -788,3 +800,27 @@ instance FromJSON SearchAlbums where
 newtype SearchTracks = SearchTracks { unSearchTracks :: Paging Track }
 instance FromJSON SearchTracks where
 	parseJSON = withObject "SearchTracks" $ \o -> SearchTracks <$> o.: "tracks"
+
+data SavedAlbum = SavedAlbum {
+	savedAlbumAddedAt :: UTCTime,
+	savedAlbum :: Album
+} deriving (Show)
+instance FromJSON SavedAlbum where
+	parseJSON = withObject "SavedAlbum" $ \o -> SavedAlbum
+		<$> o .: "added_at"
+		<*> o .: "album"
+
+data SavedTrack = SavedTrack {
+	savedTrackAddedAt :: UTCTime,
+	savedTrack :: Track
+} deriving (Show)
+instance FromJSON SavedTrack where
+	parseJSON = withObject "SavedTrack" $ \o -> SavedTrack
+		<$> o .: "added_at"
+		<*> o .: "track"
+
+newtype MyArtists = MyArtists {
+	myArtists :: Paging ArtistS -- TODO: really a full Artist
+} deriving (Show)
+instance FromJSON MyArtists where
+	parseJSON = withObject "MyArtists" $ \o -> MyArtists <$> o .: "artists"

@@ -106,6 +106,9 @@ cachePlace SCurrentUser = Just $ CachePlace {
 		cpDecode = const $ pure . Just . T.decodeUtf8
 	}
 cachePlace SCurrentUserPlaylists = Nothing
+cachePlace SCurrentUserArtists = Nothing
+cachePlace SCurrentUserAlbums = Nothing
+cachePlace SCurrentUserTracks = Nothing
 -- this must not be cached, the SPlaylistTracks depends on it being the latest version to invalidate the cache
 cachePlace (SPlaylist _) = Nothing
 -- this depends on SPlaylist not being cached and being prefetched (see Query.exec _ (SPlaylistTracks _))

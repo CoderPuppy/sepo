@@ -72,6 +72,9 @@ srcOthers :: Source a -> a -> DM.DMap Source Identity
 srcOthers s v = case (s, v) of
 	(SCurrentUser, _) -> DM.empty
 	(SCurrentUserPlaylists, pls) -> DM.unions $ fmap (\pl -> srcAll (SPlaylist $ playlistId pl) pl) pls
+	(SCurrentUserArtists, ars) -> DM.unions $ fmap (\ar -> srcAll (SArtist $ artistId ar) ar) ars
+	(SCurrentUserAlbums, als) -> DM.unions $ fmap (\(al, _) -> srcAll (SAlbum $ albumId al) al) als
+	(SCurrentUserTracks, trs) -> DM.unions $ fmap (\(tr, _) -> srcAll (STrack $ trackId tr) tr) trs
 	(SPlaylist pid, _) -> DM.empty
 	(SPlaylistTracks pid, trs) -> DM.unions $ fmap (\(tr, _) -> srcAll (STrack $ trackId tr) tr) trs
 	(SCurrentlyPlaying, res) -> maybe DM.empty (\(_, tr) -> srcAll (STrack $ trackId tr) tr) res
@@ -248,7 +251,13 @@ fetch ctx ss = do
 exec :: (MonadIO m, MonadFail m) => Ctx -> Source a -> m (m (), m a)
 exec ctx SCurrentUser = pure $ (pure (),) $ fmap HTTP.userId $ HTTP.run_ (ctxHTTP ctx) HTTP.getUser
 exec ctx SCurrentUserPlaylists = pure $ (pure (),) $ fmap (fmap httpPlaylistS) $
-	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged (HTTP.getPlaylists client) (Just 50)
+	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged (HTTP.getMyPlaylists client) (Just 50)
+exec ctx SCurrentUserArtists = pure $ (pure (),) $ fmap (fmap httpArtistS) $
+	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged ((fmap HTTP.myArtists .) . HTTP.getMyArtists client "artist") (Just 50)
+exec ctx SCurrentUserAlbums = pure $ (pure (),) $ fmap (fmap (httpAlbum . HTTP.savedAlbum &&& HTTP.savedAlbumAddedAt)) $
+	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged (HTTP.getMyAlbums client) (Just 50)
+exec ctx SCurrentUserTracks = pure $ (pure (),) $ fmap (fmap (httpTrack . HTTP.savedTrack &&& HTTP.savedTrackAddedAt)) $
+	HTTP.run_ (ctxHTTP ctx) $ \client -> HTTP.getAllPaged (HTTP.getMyTracks client) (Just 50)
 exec ctx (SPlaylist pid) = do
 	tracksVar <-
 		(fmap (DM.member $ SPlaylistTracks pid) (readIORef $ ctxCache ctx) >>=) $

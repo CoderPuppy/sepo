@@ -233,6 +233,15 @@ prefixes = prefixBuild $ execWriter $ do
 	tell $ pure $ (["my_playlists", "playlists"],) $ PrefixEntry "my playlists" False $ do
 		notFollowedBy $ satisfy isWordChar
 		pure $ ECmd MyPlaylists
+	tell $ pure $ (["my_artists", "artists"],) $ PrefixEntry "my artists" False $ do
+		notFollowedBy $ satisfy isWordChar
+		pure $ ECmd MyArtists
+	tell $ pure $ (["my_albums", "albums"],) $ PrefixEntry "my albums" False $ do
+		notFollowedBy $ satisfy isWordChar
+		pure $ ECmd MyAlbums
+	tell $ pure $ (["my_tracks", "tracks"],) $ PrefixEntry "my tracks" False $ do
+		notFollowedBy $ satisfy isWordChar
+		pure $ EField $ FieldAccess MyTracks []
 	tell $ pure $ (["empty", "ε", "ø"],) $ PrefixEntry "empty" False $ do
 		notFollowedBy $ satisfy isWordChar
 		pure $ ECmd Empty

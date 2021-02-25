@@ -21,6 +21,9 @@ These are where you get collections of tracks.
 - The currently playing "context" (playlist, album or artist) - `playing`, `current`, `this`
 - The currently playing track - `playing_song`, `current_song`, `this_song`, `playing_track`, `current_track`, `this_track`
 - All of the user's playlists - `my_playlists`, `playlists`
+- User's liked songs - `my_tracks`, `tracks`
+- User's followed artists - `my_artists`, `artists`
+- User's saved albums - `my_albums`, `albums`
 - An alias - quoted or unquoted
 	e.g. `_stdin`, `_"Bowling for Soup"`
 	TODO
@@ -62,7 +65,7 @@ Example: `sort_artist sort_album unique 'All Time Low'`
 
 ## Assignments
 
-Some of the atoms may be assigned to: playlists, aliases, files, and the currently playing context. These are known as fields.
+Some of the atoms may be assigned to: playlists, aliases, files, the currently playing context, and the user's liked songs. These are known as fields.
 Note: There are restrictions on what may be assigned to the currently playing context, it must be a playlist, album or artist. A common pattern is assigning to a playlist just before assigning to `playing`, i.e. `playing = test1 = …`
 
 These take the form of `<atom> = <expression>` like `test1 = 'All Time Low' + 'Hey Monday'`. They return what is assigned so can be chained as in `playing = test1 = 'All Time Low' + 'Hey Monday'` (it is right associative).

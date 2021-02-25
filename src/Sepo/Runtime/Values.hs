@@ -116,6 +116,9 @@ vSortArtist = flip Value Nothing . fmap (Ordered . sortOn (fmap artistName . tra
 data Source a where
 	SCurrentUser :: Source T.Text
 	SCurrentUserPlaylists :: Source [Playlist]
+	SCurrentUserArtists :: Source [Artist]
+	SCurrentUserAlbums :: Source [(Album, UTCTime)]
+	SCurrentUserTracks :: Source [(Track, UTCTime)]
 	SPlaylist :: T.Text -> Source Playlist
 	SPlaylistTracks :: T.Text -> Source [(Track, UTCTime)]
 	SCurrentlyPlaying :: Source (Maybe (Maybe (HTTP.ContextType, T.Text), Track))
@@ -131,6 +134,9 @@ deriving instance Show (Source a)
 instance GEq Source where
 	SCurrentUser `geq` SCurrentUser = Just Refl
 	SCurrentUserPlaylists `geq` SCurrentUserPlaylists = Just Refl
+	SCurrentUserArtists `geq` SCurrentUserArtists = Just Refl
+	SCurrentUserAlbums `geq` SCurrentUserAlbums = Just Refl
+	SCurrentUserTracks `geq` SCurrentUserTracks = Just Refl
 	SPlaylist a `geq` SPlaylist b = bool (Just Refl) Nothing $ a == b
 	SPlaylistTracks a `geq` SPlaylistTracks b = bool (Just Refl) Nothing $ a == b
 	SCurrentlyPlaying `geq` SCurrentlyPlaying = Just Refl
@@ -146,9 +152,24 @@ instance GEq Source where
 instance GCompare Source where
 	SCurrentUser `gcompare` SCurrentUser = GEQ
 	SCurrentUser `gcompare` _ = GLT
-	SCurrentUserPlaylists`gcompare` SCurrentUser = GGT
-	SCurrentUserPlaylists`gcompare` SCurrentUserPlaylists = GEQ
-	SCurrentUserPlaylists`gcompare` _ = GLT
+	SCurrentUserPlaylists `gcompare` SCurrentUser = GGT
+	SCurrentUserPlaylists `gcompare` SCurrentUserPlaylists = GEQ
+	SCurrentUserPlaylists `gcompare` _ = GLT
+	SCurrentUserArtists `gcompare` SCurrentUser = GGT
+	SCurrentUserArtists `gcompare` SCurrentUserPlaylists = GGT
+	SCurrentUserArtists `gcompare` SCurrentUserArtists = GEQ
+	SCurrentUserArtists `gcompare` _ = GLT
+	SCurrentUserAlbums `gcompare` SCurrentUser = GGT
+	SCurrentUserAlbums `gcompare` SCurrentUserPlaylists = GGT
+	SCurrentUserAlbums `gcompare` SCurrentUserArtists = GGT
+	SCurrentUserAlbums `gcompare` SCurrentUserAlbums = GEQ
+	SCurrentUserAlbums `gcompare` _ = GLT
+	SCurrentUserTracks `gcompare` SCurrentUser = GGT
+	SCurrentUserTracks `gcompare` SCurrentUserPlaylists = GGT
+	SCurrentUserTracks `gcompare` SCurrentUserArtists = GGT
+	SCurrentUserTracks `gcompare` SCurrentUserAlbums = GGT
+	SCurrentUserTracks `gcompare` SCurrentUserTracks = GEQ
+	SCurrentUserTracks `gcompare` _ = GLT
 	SPlaylist _ `gcompare` SCurrentUser = GGT
 	SPlaylist _ `gcompare` SCurrentUserPlaylists = GGT
 	SPlaylist a `gcompare` SPlaylist b = case compare a b of
@@ -158,6 +179,9 @@ instance GCompare Source where
 	SPlaylist _ `gcompare` _ = GLT
 	SPlaylistTracks _ `gcompare` SCurrentUser = GGT
 	SPlaylistTracks _ `gcompare` SCurrentUserPlaylists = GGT
+	SPlaylistTracks _ `gcompare` SCurrentUserArtists = GGT
+	SPlaylistTracks _ `gcompare` SCurrentUserAlbums = GGT
+	SPlaylistTracks _ `gcompare` SCurrentUserTracks = GGT
 	SPlaylistTracks _ `gcompare` SPlaylist _ = GGT
 	SPlaylistTracks a `gcompare` SPlaylistTracks b = case compare a b of
 		LT -> GLT
@@ -166,12 +190,18 @@ instance GCompare Source where
 	SPlaylistTracks _ `gcompare` _ = GLT
 	SCurrentlyPlaying `gcompare` SCurrentUser = GGT
 	SCurrentlyPlaying `gcompare` SCurrentUserPlaylists = GGT
+	SCurrentlyPlaying `gcompare` SCurrentUserArtists = GGT
+	SCurrentlyPlaying `gcompare` SCurrentUserAlbums = GGT
+	SCurrentlyPlaying `gcompare` SCurrentUserTracks = GGT
 	SCurrentlyPlaying `gcompare` SPlaylist _ = GGT
 	SCurrentlyPlaying `gcompare` SPlaylistTracks _ = GGT
 	SCurrentlyPlaying `gcompare` SCurrentlyPlaying = GEQ
 	SCurrentlyPlaying `gcompare` _ = GLT
 	STrack _ `gcompare` SCurrentUser = GGT
 	STrack _ `gcompare` SCurrentUserPlaylists = GGT
+	STrack _ `gcompare` SCurrentUserArtists = GGT
+	STrack _ `gcompare` SCurrentUserAlbums = GGT
+	STrack _ `gcompare` SCurrentUserTracks = GGT
 	STrack _ `gcompare` SPlaylist _ = GGT
 	STrack _ `gcompare` SPlaylistTracks _ = GGT
 	STrack _ `gcompare` SCurrentlyPlaying = GGT
@@ -182,6 +212,9 @@ instance GCompare Source where
 	STrack _ `gcompare` _ = GLT
 	SAlbum _ `gcompare` SCurrentUser = GGT
 	SAlbum _ `gcompare` SCurrentUserPlaylists = GGT
+	SAlbum _ `gcompare` SCurrentUserArtists = GGT
+	SAlbum _ `gcompare` SCurrentUserAlbums = GGT
+	SAlbum _ `gcompare` SCurrentUserTracks = GGT
 	SAlbum _ `gcompare` SPlaylist _ = GGT
 	SAlbum _ `gcompare` SPlaylistTracks _ = GGT
 	SAlbum _ `gcompare` SCurrentlyPlaying = GGT
@@ -193,6 +226,9 @@ instance GCompare Source where
 	SAlbum _ `gcompare` _ = GLT
 	SAlbumTracks _ `gcompare` SCurrentUser = GGT
 	SAlbumTracks _ `gcompare` SCurrentUserPlaylists = GGT
+	SAlbumTracks _ `gcompare` SCurrentUserArtists = GGT
+	SAlbumTracks _ `gcompare` SCurrentUserAlbums = GGT
+	SAlbumTracks _ `gcompare` SCurrentUserTracks = GGT
 	SAlbumTracks _ `gcompare` SPlaylist _ = GGT
 	SAlbumTracks _ `gcompare` SPlaylistTracks _ = GGT
 	SAlbumTracks _ `gcompare` SCurrentlyPlaying = GGT
@@ -205,6 +241,9 @@ instance GCompare Source where
 	SAlbumTracks _ `gcompare` _ = GLT
 	SArtist _ `gcompare` SCurrentUser = GGT
 	SArtist _ `gcompare` SCurrentUserPlaylists = GGT
+	SArtist _ `gcompare` SCurrentUserArtists = GGT
+	SArtist _ `gcompare` SCurrentUserAlbums = GGT
+	SArtist _ `gcompare` SCurrentUserTracks = GGT
 	SArtist _ `gcompare` SPlaylist _ = GGT
 	SArtist _ `gcompare` SPlaylistTracks _ = GGT
 	SArtist _ `gcompare` SCurrentlyPlaying = GGT
@@ -218,6 +257,9 @@ instance GCompare Source where
 	SArtist _ `gcompare` _ = GLT
 	SArtistAlbums _ `gcompare` SCurrentUser = GGT
 	SArtistAlbums _ `gcompare` SCurrentUserPlaylists = GGT
+	SArtistAlbums _ `gcompare` SCurrentUserArtists = GGT
+	SArtistAlbums _ `gcompare` SCurrentUserAlbums = GGT
+	SArtistAlbums _ `gcompare` SCurrentUserTracks = GGT
 	SArtistAlbums _ `gcompare` SPlaylist _ = GGT
 	SArtistAlbums _ `gcompare` SPlaylistTracks _ = GGT
 	SArtistAlbums _ `gcompare` SCurrentlyPlaying = GGT
@@ -232,6 +274,9 @@ instance GCompare Source where
 	SArtistAlbums _ `gcompare` _ = GLT
 	SSearchArtists _ _ `gcompare` SCurrentUser = GGT
 	SSearchArtists _ _ `gcompare` SCurrentUserPlaylists = GGT
+	SSearchArtists _ _ `gcompare` SCurrentUserArtists = GGT
+	SSearchArtists _ _ `gcompare` SCurrentUserAlbums = GGT
+	SSearchArtists _ _ `gcompare` SCurrentUserTracks = GGT
 	SSearchArtists _ _ `gcompare` SPlaylist _ = GGT
 	SSearchArtists _ _ `gcompare` SPlaylistTracks _ = GGT
 	SSearchArtists _ _ `gcompare` SCurrentlyPlaying = GGT
@@ -247,6 +292,9 @@ instance GCompare Source where
 	SSearchArtists _ _ `gcompare` _ = GLT
 	SSearchAlbums _ _ `gcompare` SCurrentUser = GGT
 	SSearchAlbums _ _ `gcompare` SCurrentUserPlaylists = GGT
+	SSearchAlbums _ _ `gcompare` SCurrentUserArtists = GGT
+	SSearchAlbums _ _ `gcompare` SCurrentUserAlbums = GGT
+	SSearchAlbums _ _ `gcompare` SCurrentUserTracks = GGT
 	SSearchAlbums _ _ `gcompare` SPlaylist _ = GGT
 	SSearchAlbums _ _ `gcompare` SPlaylistTracks _ = GGT
 	SSearchAlbums _ _ `gcompare` SCurrentlyPlaying = GGT
@@ -263,6 +311,9 @@ instance GCompare Source where
 	SSearchAlbums _ _ `gcompare` _ = GLT
 	SSearchTracks _ _ `gcompare` SCurrentUser = GGT
 	SSearchTracks _ _ `gcompare` SCurrentUserPlaylists = GGT
+	SSearchTracks _ _ `gcompare` SCurrentUserArtists = GGT
+	SSearchTracks _ _ `gcompare` SCurrentUserAlbums = GGT
+	SSearchTracks _ _ `gcompare` SCurrentUserTracks = GGT
 	SSearchTracks _ _ `gcompare` SPlaylist _ = GGT
 	SSearchTracks _ _ `gcompare` SPlaylistTracks _ = GGT
 	SSearchTracks _ _ `gcompare` SCurrentlyPlaying = GGT
@@ -285,6 +336,8 @@ data Action a where
 	APlaylistReplace :: T.Text -> [Track] -> Action Playlist
 	APlaylistAdd :: T.Text -> Maybe Int -> [Track] -> Action Playlist
 	APlaylistRemove :: T.Text -> Maybe T.Text -> M.Map Track (Maybe [Int]) -> Action Playlist
+	ASaveTracks :: [Track] -> Action ()
+	AUnsaveTracks :: [Track] -> Action ()
 
 tracksList :: Tracks -> [Track]
 tracksList (Ordered tracks) = tracks
