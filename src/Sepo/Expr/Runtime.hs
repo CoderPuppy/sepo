@@ -127,16 +127,35 @@ executeFieldAssignment :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) =>
 executeFieldAssignment ctx stack (PlaylistId pl_id) cmd = do
 	(val, cmd') <- executeCmd ctx stack cmd
 	tracks <- tracks val
-	let chunks = chunksOf 100 $ tracksList tracks
-	playlist <- Query.apply (queryCtx ctx) $ APlaylistReplace pl_id $ fromMaybe [] $ listToMaybe chunks
-	let addTracks chunk = Query.apply (queryCtx ctx) $ APlaylistAdd pl_id Nothing chunk
-	playlist <- foldl ((. addTracks) . (*>)) (pure playlist) (drop 1 chunks)
+	playlist <- case tracks of
+		Ordered tracks -> stupid tracks
+		Unordered tracks -> do
+			playlist <- Query.dataFetch $ SPlaylist pl_id
+			existing <-
+				fmap (M.fromListWith S.union . flip (zipWith (,)) (fmap S.singleton [0..]) . fmap fst) $
+				Query.dataFetch $ SPlaylistTracks pl_id
+			let diff = M.unionWith (+) tracks $ fmap (negate . S.size) existing
+			playlist <- foldr (<*) (pure playlist) $ flip fmap (chunksOf 100 $ filter ((< 0) . snd) $ M.toAscList diff) $
+				\chunk -> Query.apply (queryCtx ctx) $ APlaylistRemove pl_id (Just $ playlistSnapshotId playlist) $
+				M.intersectionWith
+					((Just .) . (. S.toDescList) . take)
+					(M.fromAscList chunk) existing
+			playlist <- foldr (<*) (pure playlist) $ flip fmap (chunksOf 100 $ msToL $ M.filter (> 0) diff) $
+				\chunk -> Query.apply (queryCtx ctx) $ APlaylistAdd pl_id Nothing chunk
+			pure playlist
 	liftIO $ T.appendFile (aliasesPath ctx) $ "spotify:playlist:" <> pl_id <> " = " <> reify minBound cmd <> ";\n"
 	modifyIORef (aliases ctx) $ M.insert (Left pl_id) cmd
 	pure $ (, cmd') $ Value {
 		tracks = pure tracks,
 		existing = Just $ ExPlaylist playlist
 	}
+	where
+		stupid tracks = do
+			let chunks = chunksOf 100 tracks
+			playlist <- Query.apply (queryCtx ctx) $ APlaylistReplace pl_id $ fromMaybe [] $ listToMaybe chunks
+			let addTracks chunk = Query.apply (queryCtx ctx) $ APlaylistAdd pl_id Nothing chunk
+			playlist <- foldl ((. addTracks) . (*>)) (pure playlist) (drop 1 chunks)
+			pure playlist
 executeFieldAssignment ctx stack (PlaylistName name) cmd = do
 	pl_id <- findPlaylist ctx name >>= \case
 		Just pl -> pure $ playlistId pl
