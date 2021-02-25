@@ -12,6 +12,7 @@ import Data.Maybe
 import Data.Proxy
 import Data.Time.Clock (UTCTime)
 import GHC.Exts (IsList(..))
+import GHC.IORef (atomicSwapIORef)
 import Network.HTTP.Client (Manager)
 import Network.HTTP.Client.TLS (newTlsManager)
 import Network.HTTP.Types.Status
@@ -40,6 +41,7 @@ data Ctx = Ctx {
 	ctxMan :: Manager,
 	ctxPath :: FilePath,
 	ctxTokenRef :: IORef (MVar T.Text),
+	ctxTokenRefreshRef :: IORef Bool,
 	ctxClientId :: T.Text,
 	ctxClientSecret :: T.Text,
 	ctxRefreshToken :: T.Text,
@@ -54,6 +56,7 @@ start = do
 	let ctxPath = home <> "/.config/sepo"
 	token <- liftIO $ T.readFile $ ctxPath <> "/token"
 	ctxTokenRef <- newIORef =<< newMVar token
+	ctxTokenRefreshRef <- newIORef False
 	ctxClientId <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/client-id"
 	ctxClientSecret <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/client-secret"
 	ctxRefreshToken <- fmap (head . T.lines) $ liftIO $ T.readFile $ ctxPath <> "/refresh-token"
@@ -124,20 +127,24 @@ run_ ctx m = run ctx m >>= \case
 	Right v -> pure v
 
 refreshAccessToken :: MonadIO m => Ctx -> m (Either ClientError ())
-refreshAccessToken ctx = do
-	var <- newEmptyMVar
-	atomicWriteIORef (ctxTokenRef ctx) var
-	res <- liftIO $ runClientM
-		(client (Proxy :: Proxy AuthAPI)
-			(("Basic " <>) $ T.decodeUtf8 $ B64.encode $ T.encodeUtf8 $ ctxClientId ctx <> ":" <> ctxClientSecret ctx)
-			(RefreshToken $ ctxRefreshToken ctx))
-		(mkClientEnv (ctxMan ctx) (BaseUrl Https "accounts.spotify.com" 443 "/api"))
-	case res of
-		Left err -> pure $ Left err
-		Right (RefreshedToken {..}) -> do
-			liftIO $ T.writeFile (ctxPath ctx <> "/token") refreshedTokenAccessToken
-			putMVar var refreshedTokenAccessToken
-			pure $ Right ()
+refreshAccessToken ctx = liftIO (atomicSwapIORef (ctxTokenRefreshRef ctx) True) >>= \case
+	True -> pure $ Right ()
+	False -> do
+		liftIO $ hPutStrLn stderr "refreshing access token"
+		var <- newEmptyMVar
+		atomicWriteIORef (ctxTokenRef ctx) var
+		res <- liftIO $ runClientM
+			(client (Proxy :: Proxy AuthAPI)
+				(("Basic " <>) $ T.decodeUtf8 $ B64.encode $ T.encodeUtf8 $ ctxClientId ctx <> ":" <> ctxClientSecret ctx)
+				(RefreshToken $ ctxRefreshToken ctx))
+			(mkClientEnv (ctxMan ctx) (BaseUrl Https "accounts.spotify.com" 443 "/api"))
+		case res of
+			Left err -> pure $ Left err
+			Right (RefreshedToken {..}) -> do
+				liftIO $ T.writeFile (ctxPath ctx <> "/token") refreshedTokenAccessToken
+				putMVar var refreshedTokenAccessToken
+				atomicWriteIORef (ctxTokenRefreshRef ctx) False
+				pure $ Right ()
 
 type AuthAPI = "token" :> Header' '[Required, Strict] "Authorization" T.Text :> ReqBody '[FormUrlEncoded] RefreshToken :> Post '[JSON] RefreshedToken
 
