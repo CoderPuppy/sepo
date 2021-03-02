@@ -75,7 +75,7 @@ prefixBuild es =
 		(\trie (prefix, e) -> let
 				conflicting = do
 					(prefix', e', _) <- Trie.match trie prefix
-					bool Nothing (Just ()) $ preExclusive e'
+					guard $ preExclusive e'
 					pure (prefix', e')
 			in case conflicting of
 				Just (prefix', e') -> error $

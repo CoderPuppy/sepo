@@ -43,7 +43,7 @@ data Context = Context {
 	queryCtx :: Query.Ctx,
 	dbusClient :: DBus.Client,
 	aliasesPath :: FilePath,
-	aliases :: IORef (M.Map (Either T.Text T.Text) Cmd)
+	aliases :: IORef (M.Map T.Text Cmd)
 }
 
 data Stack = Stack {
@@ -65,16 +65,29 @@ start queryCtx = do
 			True -> do
 				txt <- liftIO $ T.readFile aliasesPath
 				let
-					p = fmap M.fromList $ many $
-						(,) <$> f <* Parser.ws <* MP.chunk "=" <* Parser.ws <*> fmap Parser.exprCmd Parser.expr <* Parser.ws
-					f
-						=   MP.chunk "spotify:playlist:" *> fmap Left (MP.takeWhileP (Just "playlist id") isAlphaNum)
-						<|> MP.chunk "_" *> fmap Right Parser.quoted
+					p = do
+						entries <- Parser.compoundInner' $ do
+							key <- empty
+								<|> MP.chunk "spotify:playlist:" *> fmap (const Nothing) (MP.takeWhileP (Just "playlist id") isAlphaNum)
+								<|> MP.chunk "_" *> fmap Just Parser.quoted
+							Parser.ws
+							MP.chunk "="
+							Parser.ws
+							val <- fmap Parser.exprCmd Parser.expr
+							Parser.ws
+							pure (key, val)
+						Parser.ws
+						MP.eof
+						pure $ M.fromList $ entries >>= \case
+							(_, (Nothing, _)) -> empty
+							(_, (Just k, v)) -> pure (k, v)
 				case MP.runParser (fmap fst $ WriterT.runWriterT p) aliasesPath txt of
 					Left err -> do
 						liftIO $ hPutStrLn stderr $ MP.errorBundlePretty err
 						newIORef M.empty
-					Right v -> newIORef v
+					Right v -> do
+						liftIO $ print v
+						newIORef v
 			False -> do
 				liftIO $ writeFile aliasesPath ""
 				newIORef M.empty
@@ -101,7 +114,7 @@ executeField ctx stack f@(PlaylistName name) = do
 	(val, _cmd) <- executeField ctx stack $ PlaylistId $ playlistId pl
 	pure (val, pure $ Field $ FieldAccess f [])
 executeField ctx stack f@(AliasName name) = do
-	alias <- readIORef (aliases ctx) >>= maybe (fail $ "unknown alias: " <> T.unpack name) pure . M.lookup (Right name)
+	alias <- readIORef (aliases ctx) >>= maybe (fail $ "unknown alias: " <> T.unpack name) pure . M.lookup name
 	(val, cmd) <- executeCmd ctx (stack { stAliases = S.insert name (stAliases stack) }) alias
 	pure (val, if S.member name (stAliases stack) then cmd else pure $ Field $ FieldAccess f [])
 executeField ctx stack Playing =
@@ -141,14 +154,13 @@ executeFieldAssignment ctx stack (PlaylistId pl_id) cmd = do
 			let diff = M.unionWith (+) tracks $ fmap (negate . S.size) existing
 			playlist <- foldr (<*) (pure playlist) $ flip fmap (chunksOf 100 $ filter ((< 0) . snd) $ M.toAscList diff) $
 				\chunk -> Query.apply (queryCtx ctx) $ APlaylistRemove pl_id (Just $ playlistSnapshotId playlist) $
-				M.intersectionWith
-					((Just .) . (. S.toDescList) . take)
-					(M.fromAscList chunk) existing
+					M.intersectionWith
+						(\n places -> Just $ take n $ S.toDescList places)
+						(M.fromAscList chunk) existing
 			playlist <- foldr (<*) (pure playlist) $ flip fmap (chunksOf 100 $ msToL $ M.filter (> 0) diff) $
 				\chunk -> Query.apply (queryCtx ctx) $ APlaylistAdd pl_id Nothing chunk
 			pure playlist
 	liftIO $ T.appendFile (aliasesPath ctx) $ "spotify:playlist:" <> pl_id <> " = " <> reify minBound cmd <> ";\n"
-	modifyIORef (aliases ctx) $ M.insert (Left pl_id) cmd
 	pure $ (, cmd') $ Value {
 		tracks = pure tracks,
 		existing = Just $ ExPlaylist playlist
@@ -171,7 +183,7 @@ executeFieldAssignment ctx stack (AliasName name) cmd = do
 	(val, cmd') <- executeCmd ctx (stack { stAliases = S.insert name (stAliases stack) }) cmd
 	cmd' <- cmd'
 	liftIO $ T.appendFile (aliasesPath ctx) $ "_" <> reifyQuoted name <> " = " <> reify minBound cmd' <> ";\n"
-	modifyIORef (aliases ctx) $ M.insert (Right name) cmd'
+	modifyIORef (aliases ctx) $ M.insert name cmd'
 	pure (val, pure cmd')
 executeFieldAssignment ctx stack Playing cmd = do
 	(val, cmd') <- executeCmd ctx stack cmd
@@ -305,7 +317,7 @@ executeCmd ctx stack (Unorder cmd) = do
 
 compileFilter :: (Query.MonadFraxl Source m, MonadIO m, MonadFail m) => Context -> Stack -> Cmd -> m ((Filter.Filter, m (Value m)), m Cmd)
 compileFilter ctx stack (Field (FieldAccess f@(AliasName name) [])) = do
-	alias <- readIORef (aliases ctx) >>= maybe (fail $ "unknown alias: " <> T.unpack name) pure . M.lookup (Right name)
+	alias <- readIORef (aliases ctx) >>= maybe (fail $ "unknown alias: " <> T.unpack name) pure . M.lookup name
 	(res, cmd) <- compileFilter ctx (stack { stAliases = S.insert name (stAliases stack) }) alias
 	pure (res, if S.member name (stAliases stack) then cmd else pure $ Field $ FieldAccess f [])
 compileFilter ctx stack (TrackId tr_id) = pure (
